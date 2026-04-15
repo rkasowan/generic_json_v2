@@ -1,0 +1,12 @@
+{
+  "ci_identifier": {
+    "name": "myappserver01",
+    "ip_address": "192.168.42.42"
+  },
+  "ci_type": "Linux Server",
+  "description": "Linux server service is down",
+  "event_class": "MyApp PROD",
+  "severity": "4",
+  "source": "MyApp Monitor",
+  "usbem_debug": "true"
+}

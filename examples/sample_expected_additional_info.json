@@ -1,0 +1,18 @@
+{
+  "assignment_group": "<resolved_group_sys_id>",
+  "assignment_group_name": "APL_Moogsoft:Eng",
+  "assignment_group_lookup_status": "matched",
+  "assignment_group_lookup_method": "exact_name",
+  "cmdb_ci": "<resolved_ci_sys_id>",
+  "direct_to_incident": "true",
+  "dti_impact": "4",
+  "dti_urgency": "4",
+  "dti_impact_source": "severity_map",
+  "dti_urgency_source": "severity_map",
+  "dti_application": "Moogsoft",
+  "dti_car_id": "8903",
+  "dti_car_name": "Moogsoft",
+  "dti_metric_value": "7",
+  "dti_short_description": "Service Down",
+  "dti_work_note": "Just In Case"
+}

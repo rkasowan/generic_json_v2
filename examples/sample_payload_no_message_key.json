@@ -1,0 +1,10 @@
+{
+  "description": "my_service.service is down on vmaksa69901n49\nPlease restart the service",
+  "event_class": "MyApp PROD",
+  "metric_name": "myapp.service.down",
+  "node": "vmaksa69901n49",
+  "resource": "my_service.service",
+  "severity": "4",
+  "source": "MyApp",
+  "type": "Linux Service"
+}

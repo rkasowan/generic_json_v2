@@ -1,0 +1,12 @@
+{
+  "assignment_group": "MY_Group:Name",
+  "description": "Linux server service is down",
+  "event_class": "MyApp PROD",
+  "severity": "4",
+  "source": "MyApp",
+  "type": "Linux Service",
+  "ci_identifier": {
+    "name": "myappserver01",
+    "ip_address": "192.168.42.24"
+  }
+}

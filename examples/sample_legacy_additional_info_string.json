@@ -1,0 +1,7 @@
+{
+  "source": "MyApp",
+  "event_class": "MyApp PROD",
+  "description": "Legacy sender used an escaped additional_info string",
+  "severity": "4",
+  "additional_info": "{\"assignment_group\":\"MY_Group:Name\",\"usbem_service\":\"Payments Service\",\"dti_short_description\":\"Legacy DTI short description\"}"
+}

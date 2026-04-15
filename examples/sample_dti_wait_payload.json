@@ -1,0 +1,18 @@
+{
+  "assignment_group": "MY_Group:Name",
+  "description": "Linux server service is down",
+  "direct_to_incident": "true",
+  "dti_wait_for_incident": true,
+  "dti_short_description": "Linux server service is down",
+  "dti_description": "Created synchronously from USBEM after alert generation",
+  "dti_work_note": "USBEM DTI wait path",
+  "event_class": "MyApp PROD",
+  "metric_name": "myapp.service.down",
+  "node": "myappserver01",
+  "resource": "my_service.service",
+  "severity": "4",
+  "source": "MyApp",
+  "type": "Linux Service",
+  "usbem_wait_seconds": 25,
+  "usbem_debug": true
+}

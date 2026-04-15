@@ -1,0 +1,18 @@
+{
+  "assignment_group": "MY_Group:Name",
+  "description": "Linux server service is down",
+  "direct_to_incident": "true",
+  "dti_wait_for_incident": true,
+  "dti_impact": "3",
+  "dti_urgency": "2",
+  "dti_short_description": "Linux server service is down",
+  "dti_description": "Custom impact/urgency override example",
+  "event_class": "MyApp PROD",
+  "metric_name": "myapp.service.down",
+  "node": "myappserver01",
+  "resource": "my_service.service",
+  "severity": "4",
+  "source": "MyApp",
+  "type": "Linux Service",
+  "usbem_debug": true
+}

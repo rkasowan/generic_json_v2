@@ -1,0 +1,12 @@
+{
+  "assignment_group": "MY_Group:Name",
+  "description": "Application health issue",
+  "event_class": "MyApp PROD",
+  "severity": "3",
+  "source": "MyApp",
+  "type": "Application Event",
+  "usbem_car_id": "1234",
+  "usbem_service": "APAC Loyalty Club",
+  "usbem_offering": "Gold Tier",
+  "usbem_debug": true
+}

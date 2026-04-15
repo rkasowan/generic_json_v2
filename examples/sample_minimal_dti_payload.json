@@ -1,0 +1,6 @@
+{
+  "description": "Required Incident Description",
+  "direct_to_incident": "true",
+  "severity": "4",
+  "source": "MyApp Monitor"
+}

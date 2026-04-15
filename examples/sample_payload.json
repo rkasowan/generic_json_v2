@@ -1,0 +1,15 @@
+{
+  "assignment_group": "APL_Moogsoft:Eng",
+  "description": "my_service.service is down on vmaksa69901n49\nPlease restart the service",
+  "direct_to_incident": true,
+  "dti_short_description": "Service Down",
+  "dti_work_note": "Created from USBEM connector",
+  "event_class": "MyApp PROD",
+  "message_key": "D41B63DD-A6C6-4EEF-BB1E-18835E7EB7CB",
+  "metric_name": "myapp.service.down",
+  "node": "vmaksa69901n49",
+  "resource": "my_service.service",
+  "severity": "4",
+  "source": "MyApp",
+  "type": "Linux Service"
+}

@@ -1,0 +1,24 @@
+{
+  "source": "MyApp",
+  "records": [
+    {
+      "event_class": "MyApp PROD",
+      "description": "Service A is down",
+      "node": "srv-a-01",
+      "resource": "service-a",
+      "metric_name": "service.a.down",
+      "type": "Linux Service",
+      "severity": "4"
+    },
+    {
+      "event_class": "MyApp PROD",
+      "description": "Service B is down",
+      "node": "srv-b-01",
+      "resource": "service-b",
+      "metric_name": "service.b.down",
+      "type": "Linux Service",
+      "severity": "2",
+      "additional_info": "{\"assignment_group\":\"MY_Group:Name\",\"usbem_debug\":true}"
+    }
+  ]
+}
