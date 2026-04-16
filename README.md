@@ -1,5 +1,11 @@
 # Generic Mapped JSON Push Connector
 
+Repo version: `2026.04.16.1`
+Release history: [CHANGELOG.md](CHANGELOG.md)
+
+The repo release version is separate from the locked ServiceNow transform version in
+`src/genericMappedJson_transform.js`, which remains `2026-03-18a` for the final path.
+
 ## Purpose
 
 This bundle gives you a custom **Instance** push connector transform for Event Management that accepts generic JSON, maps standard `em_event` fields when it can, and places everything else into the event's `additional_info` JSON string.
