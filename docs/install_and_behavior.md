@@ -1,5 +1,20 @@
 # Install and Behavior Notes
 
+This doc primarily describes the locked standalone `genericMappedJson` transform path.
+
+The repo now also includes the live modular `genericJsonV2` PDI layout:
+- `src/USBEM_Core.js`
+- `src/USBEM_Lookups.js`
+- `src/USBEM_Debug.js`
+- `src/USBEM_DTI.js`
+- `src/USBEM_genericJsonV2.js`
+
+For environment testing, the repo also includes:
+- `src/USBEM_genericJsonV2_Full.js`
+
+The locked standalone transform source now lives at:
+- `standalone/genericMappedJson_transform.js`
+
 ## Endpoint
 
 Create an **Instance** push connector with URL parameter value:

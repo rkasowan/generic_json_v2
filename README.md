@@ -1,10 +1,18 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.04.21.1`
+Repo version: `2026.04.21.3`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
-The repo release version is separate from the locked ServiceNow transform version in
-`src/genericMappedJson_transform.js`, which remains `2026-03-18a` for the final path.
+The repo release version is separate from the locked standalone ServiceNow transform in
+`standalone/genericMappedJson_transform.js`, which remains `2026-03-18a` for the final path.
+
+The repo also carries the live modular `genericJsonV2` source layout used in PDIs:
+- `src/USBEM_Core.js`
+- `src/USBEM_Lookups.js`
+- `src/USBEM_Debug.js`
+- `src/USBEM_DTI.js`
+- `src/USBEM_genericJsonV2.js`
+- `src/USBEM_genericJsonV2_Full.js`
 
 ## Purpose
 
@@ -15,6 +23,19 @@ It is designed to be friendly to:
 - bulk payloads with `records` or `events`
 - legacy payloads that send `additional_info` as an escaped JSON string
 - migration payloads that need assignment-group, CI, service, offering, business-app, and DTI helper behavior
+
+## Source Layout
+
+Two source layouts are kept in the repo:
+
+- `standalone/genericMappedJson_transform.js` is the locked standalone transform artifact
+- the `genericJsonV2` modular layout is split across:
+  - `src/USBEM_Core.js`
+  - `src/USBEM_Lookups.js`
+  - `src/USBEM_Debug.js`
+  - `src/USBEM_DTI.js`
+  - `src/USBEM_genericJsonV2.js`
+- `src/USBEM_genericJsonV2_Full.js` is the fully inlined test build that embeds the listener plus all four script include components in one file
 
 ## Main behavior
 
@@ -261,7 +282,13 @@ Typical response fields:
 
 ## Files in this bundle
 
-- `src/genericMappedJson_transform.js`
+- `src/USBEM_Core.js`
+- `src/USBEM_Lookups.js`
+- `src/USBEM_Debug.js`
+- `src/USBEM_DTI.js`
+- `src/USBEM_genericJsonV2.js`
+- `src/USBEM_genericJsonV2_Full.js`
+- `standalone/genericMappedJson_transform.js`
 - `docs/install_and_behavior.md`
 - `examples/ci_type_human_readable_label.json`
 - `examples/sample_bulk_payload.json`
