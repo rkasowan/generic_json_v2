@@ -138,9 +138,10 @@ Typical extra debug keys:
 
 For CI / service / offering / business-app lookups, the transform prefers:
 1. exact/class-correct matches
-2. operational records
-3. production / installed records
-4. active records
+2. higher CSDM / dependency-tree classes for duplicate CI names
+3. operational records
+4. production / installed records
+5. active records
 
 It still allows a non-operational or retired record to win if that is the only unique best match.
 

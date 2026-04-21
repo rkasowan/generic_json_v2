@@ -690,6 +690,59 @@ function debugPush(enabled, steps, message) {
         return score;
     }
 
+    function getCmdbCiClassPreference(sysClassName) {
+        var normalized = canonicalUnderscore(sysClassName);
+
+        if (!hasValue(normalized)) {
+            return { score: 0, reasons: [] };
+        }
+
+        if (normalized === 'cmdb_ci_business_app') {
+            return { score: 500, reasons: ['class_business_app'] };
+        }
+
+        if (normalized === 'cmdb_ci_service' || normalized.indexOf('cmdb_ci_service_') === 0) {
+            return { score: 400, reasons: ['class_service'] };
+        }
+
+        if (normalized === 'service_offering' || normalized.indexOf('service_offering_') === 0 || normalized.indexOf('cmdb_ci_service_offering') === 0) {
+            return { score: 300, reasons: ['class_service_offering'] };
+        }
+
+        if (normalized === 'cmdb_ci_server' || normalized.indexOf('_server') > -1) {
+            return { score: 260, reasons: ['class_server'] };
+        }
+
+        if (normalized.indexOf('vmware_instance') > -1 || normalized.indexOf('vm_instance') > -1 || normalized.indexOf('virtual_machine') > -1 || normalized.indexOf('virtual_server') > -1) {
+            return { score: 120, reasons: ['class_virtual_instance'] };
+        }
+
+        return { score: 0, reasons: [] };
+    }
+
+    function getCmdbCiLookupExtraScore(ciGr, row, canonicalTarget, compactTarget) {
+        var candidateName = row && hasValue(row.name) ? row.name : getFieldText(ciGr, 'name');
+        var extra = getCmdbCiClassPreference(row && row.sys_class_name ? row.sys_class_name : (ciGr.isValidField('sys_class_name') ? ciGr.getValue('sys_class_name') : ''));
+
+        if (!isObject(extra)) {
+            extra = { score: 0, reasons: [] };
+        }
+        if (!isArray(extra.reasons)) {
+            extra.reasons = [];
+        }
+
+        if (hasValue(canonicalTarget) && canonicalUnderscore(candidateName) === canonicalTarget) {
+            extra.score += 100;
+            extra.reasons.push('canonical_name');
+        }
+        if (hasValue(compactTarget) && compactAlphaNum(candidateName) === compactTarget) {
+            extra.score += 100;
+            extra.reasons.push('compact_name');
+        }
+
+        return extra;
+    }
+
     
 function collectMatches(gr, nameField, extraScoreFn) {
         var rows = [];
@@ -776,7 +829,7 @@ function chooseBestMatch(rows, requireUniqueTopScore) {
         }
         out.match = rows[0];
         if (rows[0].score > rows[1].score) {
-            out.selection_reason = 'highest_status_score';
+            out.selection_reason = 'highest_score';
         } else {
             out.selection_reason = 'first_after_sort';
         }
@@ -1314,30 +1367,66 @@ function normalizeAssignmentGroup(additionalInfo, debugEnabled, debugSteps) {
     }
 
     function resolveCmdbCiByName(nameValue, debugEnabled, debugSteps) {
+        var name = trimToString(nameValue);
+        var exact;
+        var tokens;
+        var canonicalTarget;
+        var compactTarget;
         var gr;
-        var rows;
-        if (!hasValue(nameValue) || !tableExists('cmdb_ci')) {
-            return { match: null, count: 0, ambiguous: false };
+        var chosen;
+        var i;
+
+        if (!hasValue(name) || !tableExists('cmdb_ci')) {
+            return { match: null, count: 0, ambiguous: false, rows: [], status: 'not_attempted', method: 'empty' };
+        }
+
+        exact = queryExactByName('cmdb_ci', 'name', name, null, function (ciGr, row) {
+            return getCmdbCiLookupExtraScore(ciGr, row, '', '');
+        }, true);
+        exact.status = exact.match ? 'matched' : (exact.ambiguous ? 'ambiguous' : 'not_found');
+        exact.method = 'exact_name';
+
+        if (exact.match) {
+            debugPush(debugEnabled, debugSteps, 'cmdb_ci exact match: ' + name + ' -> ' + exact.match.sys_id);
+            return exact;
+        }
+
+        tokens = tokenize(name);
+        canonicalTarget = canonicalUnderscore(name);
+        compactTarget = compactAlphaNum(name);
+
+        if (tokens.length === 0) {
+            return { match: null, count: 0, ambiguous: false, rows: [], status: 'not_found', method: 'canonical_name' };
         }
 
         gr = new GlideRecord('cmdb_ci');
-        if (gr.isValidField('name')) {
-            gr.addQuery('name', trimToString(nameValue));
+        if (!gr.isValidField('name')) {
+            return { match: null, count: 0, ambiguous: false, rows: [], status: 'lookup_unavailable', method: 'canonical_name' };
         }
-        if (gr.isValidField('sys_class_name')) {
-            gr.addQuery('sys_class_name', '!=', 'cmdb_ci_service');
-            gr.addQuery('sys_class_name', '!=', 'service_offering');
+
+        for (i = 0; i < tokens.length; i++) {
+            gr.addQuery('name', 'CONTAINS', tokens[i]);
         }
         gr.setLimit(MAX_QUERY_ROWS);
         gr.query();
 
-        rows = collectMatches(gr, 'name');
-        rows = chooseBestMatch(rows, true);
+        chosen = chooseBestMatch(collectMatches(gr, 'name', function (ciGr, row) {
+            return getCmdbCiLookupExtraScore(ciGr, row, canonicalTarget, compactTarget);
+        }), true);
+        chosen.status = chosen.match ? 'matched' : (chosen.ambiguous ? 'ambiguous' : 'not_found');
+        chosen.method = 'canonical_name';
 
-        if (rows.ambiguous) {
-            debugPush(debugEnabled, debugSteps, 'cmdb_ci name lookup ambiguous: ' + nameValue);
+        if (chosen.match) {
+            debugPush(debugEnabled, debugSteps, 'cmdb_ci canonical match: ' + name + ' -> ' + chosen.match.sys_id);
+            return chosen;
         }
-        return rows;
+        if (chosen.ambiguous) {
+            debugPush(debugEnabled, debugSteps, 'cmdb_ci canonical lookup ambiguous: ' + name);
+            return chosen;
+        }
+
+        debugPush(debugEnabled, debugSteps, 'cmdb_ci not found: ' + name);
+        return chosen;
     }
 
     function validateCmdbCiSysId(sysId, debugEnabled, debugSteps) {
@@ -1402,7 +1491,7 @@ function resolveCmdbCi(mapped, remaining, additionalInfo, debugEnabled, debugSte
                 exact = resolveCmdbCiByName(mapped.cmdb_ci, debugEnabled, debugSteps);
                 resolution = {
                     status: exact.match ? 'matched' : (exact.ambiguous ? 'ambiguous' : 'not_found'),
-                    method: 'cmdb_ci_name',
+                    method: exact.method || 'cmdb_ci_name',
                     count: exact.count,
                     rows: exact.rows,
                     match: exact.match,
@@ -1410,7 +1499,7 @@ function resolveCmdbCi(mapped, remaining, additionalInfo, debugEnabled, debugSte
                 };
                 if (exact.match) {
                     result = exact.match;
-                    additionalInfo.cmdb_ci_lookup_method = 'cmdb_ci_name';
+                    additionalInfo.cmdb_ci_lookup_method = exact.method || 'cmdb_ci_name';
                 }
             }
         }
@@ -1454,7 +1543,7 @@ function resolveCmdbCi(mapped, remaining, additionalInfo, debugEnabled, debugSte
                 exact = resolveCmdbCiByName(nameValue, debugEnabled, debugSteps);
                 resolution = {
                     status: exact.match ? 'matched' : (exact.ambiguous ? 'ambiguous' : 'not_found'),
-                    method: 'name_fallback',
+                    method: exact.method || 'name_fallback',
                     count: exact.count,
                     rows: exact.rows,
                     match: exact.match,
@@ -1462,7 +1551,7 @@ function resolveCmdbCi(mapped, remaining, additionalInfo, debugEnabled, debugSte
                 };
                 if (exact.match) {
                     result = exact.match;
-                    additionalInfo.cmdb_ci_lookup_method = 'name_fallback';
+                    additionalInfo.cmdb_ci_lookup_method = exact.method || 'name_fallback';
                 } else if (exact.ambiguous) {
                     additionalInfo.cmdb_ci_lookup_status = 'ambiguous';
                 }
@@ -1483,6 +1572,7 @@ function resolveCmdbCi(mapped, remaining, additionalInfo, debugEnabled, debugSte
             }
             additionalInfo.cmdb_ci_lookup_status = 'matched';
         } else if (resolution.status && resolution.status !== 'not_attempted') {
+            mapped.cmdb_ci = '';
             additionalInfo.cmdb_ci_lookup_status = resolution.status;
         }
 

@@ -1,6 +1,6 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.04.16.1`
+Repo version: `2026.04.21.1`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
 The repo release version is separate from the locked ServiceNow transform version in
@@ -151,6 +151,8 @@ When `usbem_debug=true`, the connector also restores the richer lookup diagnosti
 
 The transform can resolve `cmdb_ci` by:
 - provided `cmdb_ci` sys_id
+- exact `cmdb_ci.name`
+- canonical/token fallback for names with underscores, symbols, and separators
 - `ci_type` + nested `ci_identifier`
 - exact-name fallback when `node` is empty and a `name` is present
 
@@ -160,7 +162,12 @@ The transform can resolve `cmdb_ci` by:
 
 The transform resolves human-readable class labels back to table names before doing the CI lookup.
 
+When multiple exact-name CI matches exist, the lookup prefers higher-up CSDM / dependency-tree classes before status-based tie-breakers, such as:
+- `cmdb_ci_business_app` over `cmdb_ci_service`
+- `cmdb_ci_server` over `cmdb_ci_vmware_instance`
+
 When a CI is resolved, `additional_info.cmdb_ci` is also populated with the same sys_id.
+If no CI match is found, the event `cmdb_ci` field is left blank.
 
 ### Business application lookup
 
