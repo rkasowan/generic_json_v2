@@ -11,6 +11,8 @@ The repo now also includes the live modular `genericJsonV2` PDI layout:
 
 For environment testing, the repo also includes:
 - `src/USBEM_genericJsonV2_Full.js`
+- `atf/install_usbem_atf.js`
+- `docs/atf_testing.md`
 
 The locked standalone transform source now lives at:
 - `standalone/genericMappedJson_transform.js`
@@ -82,8 +84,8 @@ Rules:
 1. If the payload provides `dti_impact` / `dti_urgency`, those values are preserved.
 2. If the payload does not provide them, the transform fills them from the static severity map.
 3. If `direct_to_incident=true` and `dti_short_description` is not provided, the transform fills it from event `description`.
-4. If `dti_wait_for_incident=true`, the connector uses the provided values when creating the incident.
-5. If `dti_wait_for_incident=true` and no values were provided, the connector uses the severity map.
+4. If the connector creates an incident inline, it uses the provided values when present.
+5. If the connector creates an incident inline and no values were provided, it uses the severity map.
 6. Default map never generates P1.
 
 Default map:
@@ -100,6 +102,16 @@ In scoped apps this build avoids `gs.sleep` and uses record-state polling instea
 ### `usbem_wait_for_alert=true`
 
 Poll the inserted event and related alert state (scope-safe, no `gs.sleep`) and return alert identifiers.
+
+### `direct_to_incident=true` without `dti_wait_for_incident=true`
+
+Flow:
+1. insert event
+2. wait briefly for the alert using `usbem_wait_seconds` when provided, otherwise `x_usbna_usb_event.fast_dti_inline_wait_seconds` with default `20`
+3. if the alert is available inline, create or reuse one alert-linked incident before returning
+4. if the alert is still not available, queue deferred DTI work and create or reuse the incident only after the alert exists
+
+This avoids creating an orphan incident ahead of the alert, so the no-wait path no longer races with alert-side incident automation.
 
 ### `direct_to_incident=true` with `dti_wait_for_incident=true`
 
@@ -181,7 +193,8 @@ Check:
 
 Check:
 - `direct_to_incident=true`
-- `dti_wait_for_incident=true`
 - alert generation timing
 - whether the alert already had an incident
 - whether severity `0` / `5` suppressed auto-creation under the default map
+- whether deferred no-wait processing is queued under `dti_mode=deferred_after_response`
+- whether Script Actions listening for `x_usbna_usb_event.fast_dti_event_name` are configured for the same event name

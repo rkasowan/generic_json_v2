@@ -2,6 +2,20 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.04.22.1 - 2026-04-22
+
+- fixed no-wait DTI so it no longer creates an incident ahead of the alert and then races alert-side automation into a duplicate
+- added an inline alert-first no-wait window, controlled by `x_usbna_usb_event.fast_dti_inline_wait_seconds`, with deferred alert-first fallback when the alert is not ready yet
+- updated DTI incident reuse so existing incidents found by `correlation_id` are claimed onto the alert instead of creating a second incident
+- expanded the ATF helper and no-wait DTI coverage to assert one linked incident after the delayed duplicate window
+- documented the new no-wait DTI behavior, async fallback, and troubleshooting guidance
+
+## 2026.04.21.4 - 2026-04-21
+
+- added `atf/install_usbem_atf.js`, an idempotent Background Script installer that provisions the USBEM genericJsonV2 ATF suite, helper include, auth-profile hookup, and inline Basic Auth fallback
+- added `docs/atf_testing.md` with install, rerun, and execution guidance for the ATF coverage suite
+- documented the ATF assets in the main README and environment notes so repo-based testing stays tied to the project source of truth
+
 ## 2026.04.21.3 - 2026-04-21
 
 - reshaped `src/` to the six-file test bundle layout: `USBEM_Core`, `USBEM_Lookups`, `USBEM_Debug`, `USBEM_DTI`, `USBEM_genericJsonV2`, and `USBEM_genericJsonV2_Full`

@@ -16,7 +16,7 @@ USBEM_Core.prototype = {
         options = options || {};
         this.request = options.request || null;
 
-        this.VERSION = '2026-04-11c';
+        this.VERSION = '2026-04-22a';
         this.DEFAULT_SOURCE = 'GenericJSON';
         this.DEFAULT_DESCRIPTION = 'Generic JSON event';
         this.DEFAULT_SEVERITY = '5';

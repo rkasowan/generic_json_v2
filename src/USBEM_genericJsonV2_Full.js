@@ -18,7 +18,7 @@ USBEM_Core.prototype = {
         options = options || {};
         this.request = options.request || null;
 
-        this.VERSION = '2026-04-11c';
+        this.VERSION = '2026-04-22a';
         this.DEFAULT_SOURCE = 'GenericJSON';
         this.DEFAULT_DESCRIPTION = 'Generic JSON event';
         this.DEFAULT_SEVERITY = '5';
@@ -1234,7 +1234,6 @@ USBEM_Core.prototype = {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = USBEM_Core;
 }
-
 
 if (typeof Class === 'undefined') {
     var Class = {
@@ -3116,7 +3115,6 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 
-
 if (typeof Class === 'undefined') {
     var Class = {
         create: function () {
@@ -3361,7 +3359,6 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 
-
 if (typeof Class === 'undefined') {
     var Class = {
         create: function () {
@@ -3379,12 +3376,14 @@ USBEM_DTI.prototype = {
     initialize: function (core) {
         this.core = core;
         this.PROPERTY_FAST_DTI_EVENT_NAME = 'x_usbna_usb_event.fast_dti_event_name';
+        this.PROPERTY_FAST_DTI_INLINE_WAIT_SECONDS = 'x_usbna_usb_event.fast_dti_inline_wait_seconds';
         this.PROPERTY_FAST_DTI_LINK_DELAY_SECONDS = 'x_usbna_usb_event.fast_dti_link_delay_seconds';
         this.PROPERTY_FAST_DTI_LINK_MAX_RETRIES = 'x_usbna_usb_event.fast_dti_link_max_retries';
         this.PROPERTY_DTI_MAP_TABLE = 'x_usbna_usb_event.dti_map_table';
         this.PROPERTY_DTI_MAP_PENDING_WAIT_MS = 'x_usbna_usb_event.dti_map_pending_wait_ms';
 
         this.DEFAULT_FAST_DTI_EVENT_NAME = 'x_usbna_usb_event.link_alert_later';
+        this.DEFAULT_FAST_DTI_INLINE_WAIT_SECONDS = 20;
         this.DEFAULT_FAST_DTI_LINK_DELAY_SECONDS = 10;
         this.DEFAULT_FAST_DTI_LINK_MAX_RETRIES = 6;
         this.DEFAULT_DTI_MAP_PENDING_WAIT_MS = 1500;
@@ -3406,6 +3405,14 @@ USBEM_DTI.prototype = {
 
     getFastDtiEventName: function (trace) {
         return this.getStringProperty(this.PROPERTY_FAST_DTI_EVENT_NAME, this.DEFAULT_FAST_DTI_EVENT_NAME, trace);
+    },
+
+    getFastDtiInlineWaitSeconds: function (trace) {
+        var n = this.getIntProperty(this.PROPERTY_FAST_DTI_INLINE_WAIT_SECONDS, this.DEFAULT_FAST_DTI_INLINE_WAIT_SECONDS, trace);
+        if (n < 0) {
+            n = this.DEFAULT_FAST_DTI_INLINE_WAIT_SECONDS;
+        }
+        return n;
     },
 
     getFastDtiLinkDelaySeconds: function (trace) {
@@ -3827,6 +3834,19 @@ USBEM_DTI.prototype = {
             return { incident: null, status: 'suppressed_by_severity_map' };
         }
 
+        existingIncident = this.getExistingIncidentByCorrelationId(ctx.mapped.message_key, ctx.debug);
+        if (existingIncident) {
+            claim = this.claimAlertForIncident(alertGr.getUniqueValue(), existingIncident.getUniqueValue());
+            if (claim.claimed) {
+                this.core.tracePush(ctx.debug, 'existing incident claimed onto alert by correlation_id');
+                return { incident: existingIncident, status: 'existing_from_correlation_id' };
+            }
+            if (claim.incident) {
+                this.core.tracePush(ctx.debug, 'alert already linked while claiming existing correlation incident');
+                return { incident: claim.incident, status: 'existing_after_race' };
+            }
+        }
+
         createdIncident = this.createIncidentRecord(ctx);
         if (!createdIncident) {
             return { incident: null, status: 'create_failed' };
@@ -4011,66 +4031,43 @@ USBEM_DTI.prototype = {
         }
     },
 
-    getOrCreateFastIncident: function (ctx) {
-        var alertGr;
-        var existingIncident;
-        var tableName;
-        var mapOutcome;
-        var waitedIncident;
-        var createdIncident;
-
-        if (!ctx.dti.allow_incident) {
-            return { incident: null, status: 'suppressed_by_severity_map' };
+    getFastDtiInlineWaitMs: function (ctx) {
+        var waitMs = ctx && ctx.flags ? this.core.toInt(ctx.flags.wait_ms, 0) : 0;
+        if (waitMs > 0) {
+            return waitMs;
         }
+        return this.getFastDtiInlineWaitSeconds(ctx ? ctx.debug : null) * 1000;
+    },
 
-        alertGr = this.findAlertByMessageKey(ctx.mapped.message_key, ctx.mapped.source, ctx.mapped.event_class, ctx.debug);
-        if (alertGr) {
-            existingIncident = this.getIncidentFromAlert(alertGr);
-            if (existingIncident) {
-                this.upsertMapWithIncident(ctx.mapped.message_key, existingIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
-                return { incident: existingIncident, status: 'existing_from_alert' };
-            }
-        }
-
-        existingIncident = this.getExistingIncidentByCorrelationId(ctx.mapped.message_key, ctx.debug);
-        if (existingIncident) {
-            this.upsertMapWithIncident(ctx.mapped.message_key, existingIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
-            return { incident: existingIncident, status: 'existing_from_correlation_id' };
-        }
-
-        tableName = this.getDtiMapTable(ctx.debug);
-        if (this.core.hasValue(tableName)) {
-            mapOutcome = this.insertPendingMapRow(tableName, ctx.mapped.message_key, ctx.result.event_sys_id, ctx.debug);
-            if (mapOutcome.row && !mapOutcome.owner) {
-                waitedIncident = this.waitForMapIncident(tableName, mapOutcome.row.getUniqueValue(), ctx.debug);
-                if (waitedIncident) {
-                    return { incident: waitedIncident, status: 'existing_from_dti_map' };
-                }
-                existingIncident = this.getExistingIncidentByCorrelationId(ctx.mapped.message_key, ctx.debug);
-                if (existingIncident) {
-                    this.updateMapRowIncident(mapOutcome.row, existingIncident.getUniqueValue(), ctx.result.event_sys_id, 'existing_after_wait');
-                    return { incident: existingIncident, status: 'existing_after_wait' };
-                }
-                return { incident: null, status: 'pending_existing_request' };
-            }
-        }
-
-        createdIncident = this.createIncidentRecord(ctx);
-        if (!createdIncident) {
-            return { incident: null, status: 'create_failed' };
-        }
-
-        this.upsertMapWithIncident(ctx.mapped.message_key, createdIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
-        return { incident: createdIncident, status: 'created_fast' };
+    waitForAlertForFastDti: function (ctx) {
+        return this.waitForAlert({
+            flags: { wait_ms: this.getFastDtiInlineWaitMs(ctx) },
+            result: { event_sys_id: ctx.result.event_sys_id || '' },
+            mapped: {
+                message_key: ctx.mapped.message_key || '',
+                source: ctx.mapped.source || '',
+                event_class: ctx.mapped.event_class || ''
+            },
+            debug: ctx.debug
+        });
     },
 
     buildAsyncLinkPayload: function (ctx, incidentGr, retryCount) {
         return this.core.safeJSONStringify({
             event_sys_id: ctx.result.event_sys_id || '',
-            incident_sys_id: incidentGr ? (incidentGr.getUniqueValue() || '') : '',
             message_key: ctx.mapped.message_key || '',
             source: ctx.mapped.source || '',
             event_class: ctx.mapped.event_class || '',
+            description: ctx.mapped.description || '',
+            short_description: ctx.special.dti_short_description || '',
+            impact: ctx.dti.impact || '',
+            urgency: ctx.dti.urgency || '',
+            allow_incident: ctx.dti.allow_incident === true,
+            assignment_group_sys_id: ctx.resolved.assignment_group_sys_id || '',
+            cmdb_ci_sys_id: ctx.resolved.cmdb_ci_sys_id || '',
+            cmdb_ci_service: ctx.resolved.cmdb_ci_service || '',
+            cmdb_ci_service_offering: ctx.resolved.cmdb_ci_service_offering || '',
+            dti_work_note: ctx.special.dti_work_note || '',
             retry_count: typeof retryCount === 'number' ? retryCount : 0
         });
     },
@@ -4089,12 +4086,52 @@ USBEM_DTI.prototype = {
         return out;
     },
 
-    queueScheduledLinkEvent: function (incidentGr, payload, trace) {
+    buildAsyncIncidentContext: function (payload) {
+        return {
+            mapped: {
+                message_key: payload.message_key || '',
+                source: payload.source || '',
+                event_class: payload.event_class || '',
+                description: payload.description || ''
+            },
+            special: {
+                dti_short_description: payload.short_description || '',
+                dti_work_note: payload.dti_work_note || ''
+            },
+            dti: {
+                impact: payload.impact || '',
+                urgency: payload.urgency || '',
+                allow_incident: !(payload.allow_incident === false || String(payload.allow_incident) === 'false')
+            },
+            resolved: {
+                assignment_group_sys_id: payload.assignment_group_sys_id || '',
+                cmdb_ci_sys_id: payload.cmdb_ci_sys_id || '',
+                cmdb_ci_service: payload.cmdb_ci_service || '',
+                cmdb_ci_service_offering: payload.cmdb_ci_service_offering || ''
+            },
+            result: {
+                event_sys_id: payload.event_sys_id || ''
+            },
+            debug: null
+        };
+    },
+
+    getAsyncAnchorRecord: function (currentGr, payload) {
+        if (currentGr && currentGr.isValidRecord && currentGr.isValidRecord()) {
+            return currentGr;
+        }
+        if (payload && this.core.looksLikeSysId(payload.event_sys_id)) {
+            return this.getEventBySysId(payload.event_sys_id);
+        }
+        return null;
+    },
+
+    queueScheduledLinkEvent: function (anchorGr, payload, trace) {
         var eventName;
         var delaySeconds;
         var processTime;
         var payloadText;
-        if (!incidentGr || !incidentGr.isValidRecord || !incidentGr.isValidRecord()) {
+        if (!anchorGr || !anchorGr.isValidRecord || !anchorGr.isValidRecord()) {
             return false;
         }
 
@@ -4109,14 +4146,14 @@ USBEM_DTI.prototype = {
             if (typeof gs.eventQueueScheduled === 'function') {
                 processTime = new GlideDateTime();
                 processTime.addSecondsLocalTime(delaySeconds);
-                gs.eventQueueScheduled(eventName, incidentGr, payload.event_sys_id || '', payloadText, processTime);
+                gs.eventQueueScheduled(eventName, anchorGr, payload.event_sys_id || '', payloadText, processTime);
             } else {
-                gs.eventQueue(eventName, incidentGr, payload.event_sys_id || '', payloadText);
+                gs.eventQueue(eventName, anchorGr, payload.event_sys_id || '', payloadText);
             }
             return true;
         } catch (eQueue) {
             try {
-                gs.eventQueue(eventName, incidentGr, payload.event_sys_id || '', payloadText);
+                gs.eventQueue(eventName, anchorGr, payload.event_sys_id || '', payloadText);
                 return true;
             } catch (eQueueFallback) {
                 return false;
@@ -4125,20 +4162,18 @@ USBEM_DTI.prototype = {
     },
 
     queueAlertLinkLater: function (ctx, incidentGr) {
+        var eventGr;
         var payload;
         var queued;
-        if (!incidentGr) {
+        if (!this.core.looksLikeSysId(ctx.result.event_sys_id)) {
             return false;
         }
-        payload = {
-            event_sys_id: ctx.result.event_sys_id || '',
-            incident_sys_id: incidentGr.getUniqueValue() || '',
-            message_key: ctx.mapped.message_key || '',
-            source: ctx.mapped.source || '',
-            event_class: ctx.mapped.event_class || '',
-            retry_count: 0
-        };
-        queued = this.queueScheduledLinkEvent(incidentGr, payload, ctx.debug);
+        eventGr = this.getEventBySysId(ctx.result.event_sys_id);
+        if (!eventGr) {
+            return false;
+        }
+        payload = this.parseAsyncLinkPayload(ctx.result.event_sys_id, this.buildAsyncLinkPayload(ctx, incidentGr, 0));
+        queued = this.queueScheduledLinkEvent(eventGr, payload, ctx.debug);
         if (queued) {
             ctx.result.dti_link_status = 'queued';
             ctx.result.dti_link_event_name = this.getFastDtiEventName(ctx.debug);
@@ -4148,18 +4183,17 @@ USBEM_DTI.prototype = {
         return queued;
     },
 
-    relinkAlertToIncidentAsync: function (incidentGr, parm1, parm2) {
+    relinkAlertToIncidentAsync: function (currentGr, parm1, parm2) {
         var payload;
+        var anchorGr;
         var alertGr = null;
-        var existingIncident;
-        var claim;
+        var ctx;
+        var outcome;
         var maxRetries;
         var shouldRetry = false;
 
         payload = this.parseAsyncLinkPayload(parm1, parm2);
-        if (!incidentGr || !incidentGr.isValidRecord || !incidentGr.isValidRecord()) {
-            return { status: 'incident_missing' };
-        }
+        anchorGr = this.getAsyncAnchorRecord(currentGr, payload);
 
         if (this.core.looksLikeSysId(payload.event_sys_id)) {
             alertGr = this.getAlertFromEvent(this.getEventBySysId(payload.event_sys_id));
@@ -4172,7 +4206,7 @@ USBEM_DTI.prototype = {
             maxRetries = this.getFastDtiLinkMaxRetries();
             if (payload.retry_count < maxRetries) {
                 payload.retry_count = payload.retry_count + 1;
-                shouldRetry = this.queueScheduledLinkEvent(incidentGr, payload);
+                shouldRetry = this.queueScheduledLinkEvent(anchorGr, payload);
                 return {
                     status: shouldRetry ? 'retry_queued' : 'alert_not_found',
                     retry_count: String(payload.retry_count)
@@ -4184,55 +4218,49 @@ USBEM_DTI.prototype = {
             };
         }
 
-        existingIncident = this.getIncidentFromAlert(alertGr);
-        if (existingIncident) {
-            this.upsertMapWithIncident(payload.message_key, existingIncident.getUniqueValue(), payload.event_sys_id, null);
+        ctx = this.buildAsyncIncidentContext(payload);
+        outcome = this.createOrReuseIncidentForAlert(ctx, alertGr);
+        if (outcome.incident) {
+            this.upsertMapWithIncident(payload.message_key, outcome.incident.getUniqueValue(), payload.event_sys_id, null);
             return {
-                status: 'already_linked',
+                status: outcome.status || 'existing',
                 alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: existingIncident.getUniqueValue()
+                incident_sys_id: outcome.incident.getUniqueValue()
             };
         }
-
-        claim = this.claimAlertForIncident(alertGr.getUniqueValue(), incidentGr.getUniqueValue());
-        if (claim.claimed) {
-            this.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
-            return {
-                status: 'linked',
-                alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: incidentGr.getUniqueValue()
-            };
-        }
-
-        if (claim.incident) {
-            this.upsertMapWithIncident(payload.message_key, claim.incident.getUniqueValue(), payload.event_sys_id, null);
-            return {
-                status: 'already_linked',
-                alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: claim.incident.getUniqueValue()
-            };
-        }
-
         return {
-            status: 'link_failed',
-            alert_sys_id: alertGr.getUniqueValue(),
-            incident_sys_id: incidentGr.getUniqueValue()
+            status: outcome.status || 'create_failed',
+            alert_sys_id: alertGr.getUniqueValue()
         };
     },
 
     handleFastDti: function (ctx) {
+        var alertGr;
         var outcome;
         if (!ctx.flags.direct_to_incident) {
             return ctx.result;
         }
 
-        outcome = this.getOrCreateFastIncident(ctx);
-        ctx.result.dti_mode = 'fast_async';
-        ctx.result.dti_incident_status = outcome.status || '';
-        if (outcome.incident) {
-            this.core.mergeDeep(ctx.result, this.core.summarizeIncident(outcome.incident));
-            this.queueAlertLinkLater(ctx, outcome.incident);
+        alertGr = this.waitForAlertForFastDti(ctx);
+        if (alertGr) {
+            this.core.mergeDeep(ctx.result, this.core.summarizeAlert(alertGr));
+            outcome = this.createOrReuseIncidentForAlert(ctx, alertGr);
+            ctx.result.dti_mode = 'inline_after_alert';
+            ctx.result.dti_incident_status = outcome.status || '';
+            if (outcome.incident) {
+                this.core.mergeDeep(ctx.result, this.core.summarizeIncident(outcome.incident));
+                this.upsertMapWithIncident(ctx.mapped.message_key, outcome.incident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
+            }
+            return ctx.result;
         }
+
+        ctx.result.dti_mode = 'deferred_after_response';
+        if (!ctx.dti.allow_incident) {
+            ctx.result.dti_incident_status = 'suppressed_by_severity_map';
+            return ctx.result;
+        }
+        ctx.result.dti_incident_status = 'queued';
+        this.queueAlertLinkLater(ctx, null);
         return ctx.result;
     },
 
@@ -4268,6 +4296,7 @@ USBEM_DTI.prototype = {
             incidentGr = dtiOutcome.incident;
             if (incidentGr) {
                 this.core.mergeDeep(ctx.result, this.core.summarizeIncident(incidentGr));
+                this.upsertMapWithIncident(ctx.mapped.message_key, incidentGr.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
             }
         }
 
@@ -4280,8 +4309,6 @@ USBEM_DTI.prototype = {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = USBEM_DTI;
 }
-
-
 
 (function process(/*RESTAPIRequest*/ request, body) {
     var core = new USBEM_Core({ request: request });
