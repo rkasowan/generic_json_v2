@@ -107,11 +107,15 @@ Poll the inserted event and related alert state (scope-safe, no `gs.sleep`) and 
 
 Flow:
 1. insert event
-2. wait briefly for the alert using `usbem_wait_seconds` when provided, otherwise `x_usbna_usb_event.fast_dti_inline_wait_seconds` with default `20`
-3. if the alert is available inline, create or reuse one alert-linked incident before returning
-4. if the alert is still not available, queue deferred DTI work and create or reuse the incident only after the alert exists
+2. create or reuse the incident immediately
+3. return the incident in the API response
+4. complete alert attachment asynchronously after the response returns
 
-This avoids creating an orphan incident ahead of the alert, so the no-wait path no longer races with alert-side incident automation.
+The supported fast-path deployment includes the async `em_alert` reconcile rule in
+[servicenow/USBEM_FastDtiAlertReconcile.business_rule.js](../servicenow/USBEM_FastDtiAlertReconcile.business_rule.js).
+That rule links or relinks the alert to the preferred USBEM DTI incident as soon as Event Management creates the alert.
+
+If a later duplicate incident appears with the same `message_key` / `correlation_id`, the async linker prefers the original fast incident when it can safely prove they are the same duplicate chain.
 
 ### `direct_to_incident=true` with `dti_wait_for_incident=true`
 
@@ -196,5 +200,8 @@ Check:
 - alert generation timing
 - whether the alert already had an incident
 - whether severity `0` / `5` suppressed auto-creation under the default map
-- whether deferred no-wait processing is queued under `dti_mode=deferred_after_response`
+- whether no-wait processing returned `dti_mode=fast_async`
+- whether the async business rule `USBEM Fast DTI Alert Reconcile` is active on `em_alert`
 - whether Script Actions listening for `x_usbna_usb_event.fast_dti_event_name` are configured for the same event name
+- whether any scoped Script Actions instantiate `x_usbna_usb_event.USBEM_Core` / `x_usbna_usb_event.USBEM_DTI` instead of bare global class names
+- if the fallback event path is in use, whether `x_usbna_usb_event.link_alert_later` exists in **Event Registry** with table `incident`

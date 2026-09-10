@@ -2,6 +2,32 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.09.10.1 - 2026-09-10
+
+- added a hardened five-minute Linux systemd synthetic for the Generic JSON V2 DTI path
+- validated duplicate DTI events by requiring two live events to converge on exactly one correlated incident
+- removed successful probe incidents and emitted a severity-5 OK event; failures create a separately assigned DTI incident and SMTP email
+- added configurable assignment group and SMTP settings, tests, Knowledge source, and production-transfer inventory
+
+## 2026.04.22.4 - 2026-04-22
+
+- kept no-wait DTI incident-first and fast while adding an async `em_alert` reconciliation rule for reliable post-response alert attachment
+- taught correlation-id incident selection to prefer the original USBEM DTI incident so late duplicates can be relinked back to the fast incident
+- added the deployable business-rule artifact under `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js`
+
+## 2026.04.22.3 - 2026-04-22
+
+- kept the no-wait DTI path incident-first and immediate so API responses stay fast
+- removed the broken `ScheduleOnce` experiment from async alert linking and restored the delayed event / Script Action path
+- fixed `dti_link_status` reporting so failed queue attempts cannot be reported as successful
+
+## 2026.04.22.2 - 2026-04-22
+
+- restored the no-wait DTI path to immediate `fast_async` incident-first behavior so API responses stay fast again
+- kept the safer async relink logic so late duplicates with the same `message_key` / `correlation_id` can be steered back to the original fast incident
+- updated the no-wait ATF coverage to assert the immediate `fast_async` response contract as well as the delayed single-incident outcome
+- rewrote the docs to describe the returned-fast / link-later behavior instead of the temporary inline alert wait flow
+
 ## 2026.04.22.1 - 2026-04-22
 
 - fixed no-wait DTI so it no longer creates an incident ahead of the alert and then races alert-side automation into a duplicate

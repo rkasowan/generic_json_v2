@@ -1,6 +1,6 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.04.22.1`
+Repo version: `2026.09.10.1`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
 The repo release version is separate from the locked standalone ServiceNow transform in
@@ -17,6 +17,8 @@ The repo also carries the live modular `genericJsonV2` source layout used in PDI
 The repo also includes ATF assets for environment testing:
 - `atf/install_usbem_atf.js`
 - `docs/atf_testing.md`
+
+The Linux systemd synthetic under `synthetic/` runs every five minutes, validates DTI duplicate handling through live `em_event` and `incident` readback, removes the successful probe incident, emits an OK event, and creates a separately assigned DTI incident plus SMTP email only on failure. Installation and operations are documented in `kb/generic_json_v2_dti_linux_synthetic.md`.
 
 ## Purpose
 
@@ -42,6 +44,39 @@ Two source layouts are kept in the repo:
 - `src/USBEM_genericJsonV2_Full.js` is the fully inlined test build that embeds the listener plus all four script include components in one file
 - `atf/install_usbem_atf.js` is the idempotent Background Script installer for the `USBEM` parent ATF suite, the `USBEM genericJsonV2 API Coverage` child suite, and the helper include
 - `docs/atf_testing.md` documents installation, coverage, reruns, and execution flow
+
+## Inbound Email Bridge
+
+The optional Flow Designer custom Action in
+`servicenow/USBEM_JabberwockyInboundEmail.flow_action.js` lets inbound-email Flows
+create events through the same genericJsonV2 mapping path without using
+`sysevent_in_email_action`.
+
+Deploy or update it with:
+
+```bash
+python3 generic_json_v2/scripts/deploy_jabberwocky_flow_action.py
+```
+
+The deployer publishes the Flow Action
+`USBEM Jabberwocky Inbound Email JSON Event` and deactivates the legacy
+`USBEM Jabberwocky Inbound JSON Event` inbound email action if it exists.
+
+Recommended Flow Designer wiring:
+- trigger: inbound email / email received
+- trigger condition: subject contains `jabberwocky`
+- action: `USBEM Jabberwocky Inbound Email JSON Event`
+- map trigger subject to `Subject`
+- map email description/body text to `Description` or `Body Text`
+- map body HTML to `Body HTML` when available
+- map sender/from to `From Email`
+- map the source `sys_email` sys_id to `Inbound Email Sys ID` when available
+
+Action behavior:
+- subject must contain `jabberwocky` (case-insensitive); otherwise the action returns `skipped=true`
+- email body/description must contain a JSON event payload, JSON array, `{ "records": [...] }`, or `{ "events": [...] }`
+- the action parses the first JSON object/array it finds, then inserts `em_event` records through `USBEM_Core`, `USBEM_Lookups`, `USBEM_Debug`, and `USBEM_DTI`
+- email metadata is preserved in `additional_info`
 
 ## Main behavior
 
@@ -88,13 +123,14 @@ It also supports these helper inputs:
 
 If `direct_to_incident=true` and `dti_wait_for_incident` is not true:
 - the event is inserted normally
+- the connector creates or reuses the incident immediately and returns it in the same response
 - DTI breadcrumbs stay in `additional_info`
 - `dti_impact` / `dti_urgency` are always present in `additional_info`
 - if `dti_short_description` is not provided, it is auto-filled from event `description`
-- the connector first tries to wait briefly for the alert and create or reuse exactly one alert-linked incident inline
-- if the alert is still not available after that inline window, the connector queues deferred DTI work and creates or reuses the incident only after the alert exists
+- the alert link is completed asynchronously after the response returns
+- the async `em_alert` reconcile rule in [servicenow/USBEM_FastDtiAlertReconcile.business_rule.js](servicenow/USBEM_FastDtiAlertReconcile.business_rule.js) prefers the original USBEM DTI incident if Event Management later creates or links a duplicate
 
-This avoids the old fast-path race where an incident could be created before the alert and then a second incident could be created later by alert-side automation.
+If a late duplicate incident ever appears with the same `message_key`/`correlation_id`, the async linker prefers the original fast incident when it can safely do so.
 
 ### DTI with waiting
 
@@ -269,11 +305,10 @@ Polls the inserted event / alert state (scope-safe, no `gs.sleep`) and:
 - returns an existing linked incident if one already exists
 - otherwise creates a new incident if the DTI severity/override rules allow it
 
-For `direct_to_incident=true` without `dti_wait_for_incident=true`, the connector still uses the same alert-first ownership rules. It either:
-- creates or reuses the incident inline after the alert is available, with `dti_mode=inline_after_alert`
-- or queues deferred alert-first processing, with `dti_mode=deferred_after_response`
-
-The inline no-wait window defaults to property `x_usbna_usb_event.fast_dti_inline_wait_seconds` with a default value of `20`.
+For `direct_to_incident=true` without `dti_wait_for_incident=true`, the connector keeps the no-wait fast path. It:
+- creates or reuses the incident immediately, with `dti_mode=fast_async`
+- returns that incident in the response
+- then links the alert to that incident asynchronously after the response returns
 
 > In scoped apps this build avoids `gs.sleep` and uses record-state polling instead.
 

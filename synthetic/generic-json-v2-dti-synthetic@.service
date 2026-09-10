@@ -1,0 +1,21 @@
+[Unit]
+Description=Generic JSON V2 Direct To Incident synthetic for environment %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/generic-json-v2-dti-synthetic/%i.env
+ExecStart=/opt/generic-json-v2-dti-synthetic/generic_json_v2_dti_synthetic.py
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true

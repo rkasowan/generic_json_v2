@@ -1162,10 +1162,11 @@
             '    };',
             '    var response = h.postPayload(payload);',
             '    var inner = h.assertConnectorSuccess(response, 1);',
-            '    h.assertTrue(inner.dti_mode === "inline_after_alert" || inner.dti_mode === "deferred_after_response", "Unexpected DTI no-wait mode: " + inner.dti_mode);'
+            '    h.assertEquals("fast_async", inner.dti_mode, "Expected fast_async DTI mode");',
+            '    h.assertTrue(h.hasValue(inner.incident_sys_id), "DTI no-wait response did not include incident_sys_id");'
         ]));
         addServerScriptStep(testSysId, 300, setupScript(authProfileSysId, [
-            '    var state = h.waitForSingleLinkedIncident("ZZ_USBEM_ATF_DTI_NOWAIT", 30000);',
+            '    var state = h.waitForSingleLinkedIncident("ZZ_USBEM_ATF_DTI_NOWAIT", 60000);',
             '    var ev = h.getEventByMessageKey("ZZ_USBEM_ATF_DTI_NOWAIT");',
             '    var ai = h.parseAdditionalInfo(ev);',
             '    h.assertTrue(!!ev, "DTI no-wait event missing");',

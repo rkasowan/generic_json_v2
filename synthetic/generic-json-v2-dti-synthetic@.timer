@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Generic JSON V2 DTI synthetic for environment %i every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+Persistent=true
+Unit=generic-json-v2-dti-synthetic@%i.service
+
+[Install]
+WantedBy=timers.target

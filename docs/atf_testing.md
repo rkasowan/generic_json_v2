@@ -34,11 +34,17 @@ The installer creates tests for:
 6. `usbem_car_id`, `usbem_service`, `usbem_offering`, and `svc_ci_assoc` service inference
 7. `usbem_debug` companion debug event creation and lookup diagnostics
 8. `usbem_wait_for_alert`
-9. no-wait DTI single-incident enforcement and alert linking
+9. no-wait DTI fast response plus single-incident enforcement and alert linking
 10. DTI with synchronous incident creation
 11. DTI suppression for severity-map non-incident values
 
-The no-wait DTI test intentionally watches the record set for 30 seconds before asserting success so it can catch late duplicate incidents, not just the initial API response.
+The no-wait DTI test intentionally validates both pieces of the contract:
+- the response comes back in `fast_async` mode with an incident id immediately
+- the record set still settles to one linked incident after the delayed duplicate window
+
+For a clean deployment, make sure the async alert reconcile rule from
+[servicenow/USBEM_FastDtiAlertReconcile.business_rule.js](../servicenow/USBEM_FastDtiAlertReconcile.business_rule.js)
+is installed and active before running the no-wait DTI coverage.
 
 For debug coverage, the suite validates lookup diagnostics from the companion debug event attachments, especially:
 
