@@ -39,14 +39,20 @@ install -m 0644 generic-json-v2-dti-synthetic@.service /etc/systemd/system/
 install -m 0644 generic-json-v2-dti-synthetic@.timer /etc/systemd/system/
 
 index=1
+configured=0
 while [ "$index" -le 4 ]; do
   env_file="/etc/generic-json-v2-dti-synthetic/$index.env"
-  name=$(prompt "Environment $index label" "production-$index")
   url=$(prompt "Environment $index ServiceNow URL" "$(existing_value "$env_file" SN_INSTANCE_URL)")
+  if [ -z "$url" ]; then
+    echo "Skipping unconfigured environment $index." >&2
+    index=$((index + 1))
+    continue
+  fi
+  name=$(prompt "Environment $index label" "production-$index")
   password=$(prompt_secret "Environment $index password")
   password_b64=$(encode "$password")
   [ -n "$password" ] || password_b64=$(existing_value "$env_file" SN_PASSWORD_B64)
-  [ -n "$url" ] && [ -n "$password_b64" ] || { echo "URL and initial password are required for environment $index." >&2; exit 1; }
+  [ -n "$password_b64" ] || { echo "An initial password is required for environment $index." >&2; exit 1; }
   umask 077
   {
     printf 'SN_INSTANCE_URL="%s"\n' "$(escape_env "$url")"
@@ -60,12 +66,17 @@ while [ "$index" -le 4 ]; do
     printf 'DTI_CONNECTOR_SOURCE="genericJsonV2"\nDTI_EVENT_SOURCE="Generic JSON V2 DTI Synthetic"\n'
   } > "$env_file"
   chmod 0600 "$env_file"
+  configured=$((configured + 1))
   index=$((index + 1))
 done
 
+[ "$configured" -gt 0 ] || { echo "No environments are configured." >&2; exit 1; }
+
 systemctl daemon-reload
 for index in 1 2 3 4; do
-  systemctl enable "generic-json-v2-dti-synthetic@$index.timer"
-  systemctl restart "generic-json-v2-dti-synthetic@$index.timer"
+  if [ -f "/etc/generic-json-v2-dti-synthetic/$index.env" ]; then
+    systemctl enable "generic-json-v2-dti-synthetic@$index.timer"
+    systemctl restart "generic-json-v2-dti-synthetic@$index.timer"
+  fi
 done
-echo "Installed or updated four five-minute synthetic timers."
+echo "Installed or updated $configured five-minute synthetic environment(s)."

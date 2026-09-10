@@ -1,6 +1,6 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.09.10.1`
+Repo version: `2026.09.10.2`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
 The repo release version is separate from the locked standalone ServiceNow transform in

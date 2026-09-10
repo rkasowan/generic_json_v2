@@ -2,6 +2,11 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.09.10.2 - 2026-09-10
+
+- allowed staged rollout by treating an empty instance URL as a skipped slot
+- kept installer reruns idempotent so later runs can add remaining instances or update shared settings and credentials
+
 ## 2026.09.10.1 - 2026-09-10
 
 - added a hardened five-minute Linux systemd synthetic for the Generic JSON V2 DTI path

@@ -1,6 +1,6 @@
 # Generic JSON V2 Direct To Incident Linux Synthetic
 
-Version: 1.1.0
+Version: 1.1.1
 
 ## Purpose
 
@@ -18,14 +18,14 @@ Install this five-minute systemd synthetic against four production instances to 
 
 ## Install
 
-Copy the `synthetic` directory to the Linux server, then run the idempotent interactive installer as root. It prompts once for the shared username, assignment group, failure-email recipient, sender, and SMTP relay, then prompts for each of four instance labels, URLs, and passwords:
+Copy the `synthetic` directory to the Linux server, then run the idempotent interactive installer as root. It prompts once for the shared username, assignment group, failure-email recipient, sender, and SMTP relay. For each unconfigured environment, an empty instance URL skips that slot. Configure DEV in slot 1 and press Enter at the URL prompts for slots 2–4:
 
 ```bash
 cd synthetic
 sudo ./install.sh
 ```
 
-The installer writes `/etc/generic-json-v2-dti-synthetic/1.env` through `4.env`, mode `0600`. Re-run it to change a password, email setting, URL, username, or assignment group; a blank password keeps that environment's existing encoded password. It updates files and units in place and restarts all timers. `DTI_ASSIGNMENT_GROUP` accepts a group name or sys_id.
+The installer writes one mode-`0600` file per configured slot under `/etc/generic-json-v2-dti-synthetic/`. Re-run it for the progression DEV, DEV/IT, DEV/IT/UAT, and finally DEV/IT/UAT/PROD. Existing URLs appear as defaults and a blank password keeps that slot's current encoded password; enter a URL only for the next environment being added and leave later URLs empty. The installer updates files and units in place and restarts only configured timers. `DTI_ASSIGNMENT_GROUP` accepts a group name or sys_id.
 
 Credentials are base64 encoded in the environment files. Base64 is reversible encoding, not encryption or hashing, so retain root-only permissions and use an approved secret manager where required.
 
