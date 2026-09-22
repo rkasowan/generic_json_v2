@@ -19,11 +19,13 @@ USBEM_DTI.prototype = {
         this.PROPERTY_FAST_DTI_LINK_MAX_RETRIES = 'x_usbna_usb_event.fast_dti_link_max_retries';
         this.PROPERTY_DTI_MAP_TABLE = 'x_usbna_usb_event.dti_map_table';
         this.PROPERTY_DTI_MAP_PENDING_WAIT_MS = 'x_usbna_usb_event.dti_map_pending_wait_ms';
+        this.PROPERTY_DTI_TERMINAL_INCIDENT_STATES = 'x_usbna_usb_event.dti_terminal_incident_states';
 
         this.DEFAULT_FAST_DTI_EVENT_NAME = 'x_usbna_usb_event.link_alert_later';
         this.DEFAULT_FAST_DTI_LINK_DELAY_SECONDS = 10;
         this.DEFAULT_FAST_DTI_LINK_MAX_RETRIES = 6;
         this.DEFAULT_DTI_MAP_PENDING_WAIT_MS = 1500;
+        this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES = '6,7,8';
         this.PENDING_MAP_POLL_MS = 100;
     },
 
@@ -77,6 +79,157 @@ USBEM_DTI.prototype = {
             return '';
         }
         return tableName;
+    },
+
+    /**
+     * Incident states that close the reuse window for a message key.
+     * Read through the existing property helper and parsed once per instance. The value
+     * must be a comma-separated list of integer incident.state values. A blank value, or
+     * any token that is not an integer (labels, ';' separators, a null read), falls back
+     * to the whole default: a mis-set property must not silently re-enable reuse of
+     * resolved, closed or cancelled incidents.
+     */
+    getTerminalIncidentStates: function (trace) {
+        var raw;
+        var parts;
+        var value;
+        var states = [];
+        var invalid = false;
+        var i;
+
+        if (this.terminalStatesCache) {
+            return this.terminalStatesCache;
+        }
+        raw = this.getStringProperty(this.PROPERTY_DTI_TERMINAL_INCIDENT_STATES, this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES, trace);
+        if (this.core.hasValue(raw) && raw !== 'null' && raw !== 'undefined') {
+            parts = String(raw).split(',');
+            for (i = 0; i < parts.length; i++) {
+                value = this.core.trimToString(parts[i]);
+                if (!this.core.hasValue(value)) {
+                    continue;
+                }
+                if (!/^-?\d+$/.test(value)) {
+                    invalid = true;
+                    break;
+                }
+                // Canonical form, so '07' matches the '7' that getValue('state') returns.
+                value = String(parseInt(value, 10));
+                if (states.indexOf(value) < 0) {
+                    states.push(value);
+                }
+            }
+        }
+        if (invalid || !states.length) {
+            if (invalid) {
+                this.core.tracePush(trace, 'terminal incident states property invalid; using default ' + this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES);
+                try {
+                    gs.warn('USBEM DTI: ' + this.PROPERTY_DTI_TERMINAL_INCIDENT_STATES + ' value "' + raw +
+                        '" is not a comma-separated list of integer incident states; using ' + this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES);
+                } catch (eWarn) {
+                }
+            }
+            states = String(this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES).split(',');
+        }
+        this.terminalStatesCache = states;
+        return states;
+    },
+
+    /**
+     * The message key as incident.correlation_id actually stores it.
+     * Keys may be up to 1024 characters but correlation_id is shorter (100 out of box)
+     * and the platform truncates on write. Used only to let shouldPreferFastIncident move
+     * a long key's own alert off a terminal incident. It is deliberately NOT used for the
+     * correlation lookup: distinct keys sharing the first 100 characters would merge.
+     */
+    getCorrelationKey: function (messageKey) {
+        var gr;
+        var len;
+        var key = this.core.hasValue(messageKey) ? String(messageKey) : '';
+
+        if (typeof this.correlationKeyLength !== 'number') {
+            this.correlationKeyLength = 0;
+            try {
+                gr = new GlideRecord('incident');
+                if (gr.isValidField('correlation_id')) {
+                    len = parseInt(gr.getElement('correlation_id').getED().getLength(), 10);
+                    if (len > 0) {
+                        this.correlationKeyLength = len;
+                    }
+                }
+            } catch (eLen) {
+            }
+        }
+        if (this.correlationKeyLength > 0 && key.length > this.correlationKeyLength) {
+            return key.substring(0, this.correlationKeyLength);
+        }
+        return key;
+    },
+
+    /**
+     * True when an incident can still absorb new events for its message key.
+     * Judged on `state`, never on `active`: a Resolved incident is still active=true,
+     * so an `active` test would let a resolved incident keep collecting events.
+     */
+    isIncidentReusable: function (incGr, trace) {
+        var states;
+        var value;
+        var i;
+
+        if (!incGr || !incGr.isValidRecord || !incGr.isValidRecord()) {
+            return false;
+        }
+        if (!incGr.isValidField('state')) {
+            return true;
+        }
+        value = this.core.trimToString(incGr.getValue('state'));
+        if (!this.core.hasValue(value)) {
+            return true;
+        }
+        states = this.getTerminalIncidentStates(trace);
+        for (i = 0; i < states.length; i++) {
+            if (states[i] === value) {
+                return false;
+            }
+        }
+        return true;
+    },
+
+    /**
+     * A Closed alert reached by message key, or reconciled after the fact, belongs to a
+     * finished incident cycle and is left on its incident; the next cycle gets its own
+     * alert from Event Management. The exception is an event's own alert (em_event.alert),
+     * which belongs to that event's cycle even if it has closed since.
+     */
+    isClosedAlert: function (alertGr) {
+        if (!alertGr || !alertGr.isValidField || !alertGr.isValidField('state')) {
+            return false;
+        }
+        return this.core.trimToString(alertGr.getValue('state') || '') === 'Closed';
+    },
+
+    describeIncident: function (incidentGr) {
+        if (!incidentGr) {
+            return '';
+        }
+        return this.core.trimToString(incidentGr.getValue('number')) + ' (state ' +
+            this.core.trimToString(incidentGr.getValue('state')) + ')';
+    },
+
+    /**
+     * The alert's linked incident, but only when it is still reusable.
+     * getIncidentFromAlert stays state-blind for callers that need the current link
+     * whatever its state; only the reuse decisions go through this wrapper.
+     */
+    getReusableIncidentFromAlert: function (alertGr, trace) {
+        var incidentGr = this.getIncidentFromAlert(alertGr);
+        if (!incidentGr) {
+            return null;
+        }
+        if (this.isIncidentReusable(incidentGr, trace)) {
+            return incidentGr;
+        }
+        this.core.tracePush(trace, 'terminal incident skipped on alert: ' + this.describeIncident(incidentGr));
+        return null;
     },
 
     getEventBySysId: function (eventSysId) {
@@ -150,7 +303,7 @@ USBEM_DTI.prototype = {
         return stateInfo.normalized === '' || stateInfo.normalized === 'ready';
     },
 
-    findAlertByMessageKey: function (messageKey, source, eventClass, trace) {
+    findAlertByMessageKey: function (messageKey, source, eventClass, trace, options) {
         var gr;
         if (!this.core.hasValue(messageKey) || !this.core.tableExists('em_alert', trace)) {
             return null;
@@ -165,6 +318,11 @@ USBEM_DTI.prototype = {
         }
         if (this.core.hasValue(eventClass) && gr.isValidField('event_class')) {
             gr.addQuery('event_class', eventClass);
+        }
+        // The async linker must not fall back onto a closed alert from a previous
+        // incident cycle; other callers still want the most recent alert of any state.
+        if (options && options.skip_closed_alerts === true && gr.isValidField('state')) {
+            gr.addQuery('state', '!=', 'Closed');
         }
         if (gr.isValidField('sys_updated_on')) {
             gr.orderByDesc('sys_updated_on');
@@ -359,29 +517,53 @@ USBEM_DTI.prototype = {
         }
     },
 
-    claimAlertForIncident: function (alertSysId, incidentSysId) {
+    /**
+     * Link an alert to an incident, but only if nobody else owns it.
+     * replaceableIncidentSysId widens the claim to one specific existing link - the
+     * incident the caller already inspected. The condition is re-checked in the query
+     * itself and is scoped to this alert and that exact sys_id, so it can never widen to
+     * another alert or another owner; a concurrent writer that moved the alert elsewhere
+     * before the query wins. Only the short gap between query and update() remains.
+     */
+    claimAlertForIncident: function (alertSysId, incidentSysId, replaceableIncidentSysId) {
         var claimGr;
+        var linkField = '';
+        var condition = null;
+        var priorLink = '';
+
         if (!this.core.looksLikeSysId(alertSysId) || !this.core.looksLikeSysId(incidentSysId)) {
-            return { claimed: false, incident: null };
+            return { claimed: false, incident: null, replaced: false };
         }
 
         claimGr = new GlideRecord('em_alert');
         claimGr.addQuery('sys_id', alertSysId);
         if (claimGr.isValidField('task')) {
-            claimGr.addNullQuery('task');
+            linkField = 'task';
         } else if (claimGr.isValidField('incident')) {
-            claimGr.addNullQuery('incident');
+            linkField = 'incident';
+        }
+        if (linkField) {
+            condition = claimGr.addNullQuery(linkField);
+            if (this.core.looksLikeSysId(replaceableIncidentSysId) && condition) {
+                try {
+                    condition.addOrCondition(linkField, replaceableIncidentSysId);
+                } catch (eOr) {
+                }
+            }
         }
         claimGr.setLimit(1);
         this.queryNow(claimGr);
         if (!claimGr.next()) {
             claimGr = new GlideRecord('em_alert');
             if (claimGr.get(alertSysId)) {
-                return { claimed: false, incident: this.getIncidentFromAlert(claimGr) };
+                return { claimed: false, incident: this.getIncidentFromAlert(claimGr), replaced: false };
             }
-            return { claimed: false, incident: null };
+            return { claimed: false, incident: null, replaced: false };
         }
 
+        if (linkField) {
+            priorLink = this.core.trimToString(claimGr.getValue(linkField) || '');
+        }
         if (claimGr.isValidField('incident')) {
             claimGr.setValue('incident', incidentSysId);
         }
@@ -389,7 +571,7 @@ USBEM_DTI.prototype = {
             claimGr.setValue('task', incidentSysId);
         }
         claimGr.update();
-        return { claimed: true, incident: null };
+        return { claimed: true, incident: null, replaced: this.core.looksLikeSysId(priorLink) };
     },
 
     forceAlertForIncident: function (alertSysId, incidentSysId) {
@@ -411,7 +593,13 @@ USBEM_DTI.prototype = {
         return true;
     },
 
+    /**
+     * Should `preferredIncident` displace `currentIncident` as the alert's link?
+     * State is checked before age: an incident that has been resolved, closed or
+     * cancelled can neither win nor hold the alert, however old it is.
+     */
     shouldPreferFastIncident: function (payload, preferredIncident, currentIncident) {
+        var correlationKey;
         var preferredCorrelation = '';
         var currentCorrelation = '';
         var preferredCreated = '';
@@ -436,7 +624,24 @@ USBEM_DTI.prototype = {
             currentCorrelation = currentIncident.getValue('correlation_id') || '';
         }
         if (preferredCorrelation !== payload.message_key || currentCorrelation !== payload.message_key) {
+            // Keys longer than correlation_id are stored truncated, so they never match
+            // exactly. For those, allow only the terminal-replacement rule: the caller is
+            // deciding for this key's own alert, so moving it off a finished incident onto
+            // a live one of the same stored key cannot merge distinct keys. The age and
+            // creator rules below still require an exact match, as before this change.
+            correlationKey = this.getCorrelationKey(payload.message_key);
+            if (correlationKey === String(payload.message_key) ||
+                preferredCorrelation !== correlationKey || currentCorrelation !== correlationKey) {
+                return false;
+            }
+            return this.isIncidentReusable(preferredIncident) && !this.isIncidentReusable(currentIncident);
+        }
+
+        if (!this.isIncidentReusable(preferredIncident)) {
             return false;
+        }
+        if (!this.isIncidentReusable(currentIncident)) {
+            return true;
         }
 
         if (preferredIncident.isValidField('sys_created_by')) {
@@ -552,6 +757,32 @@ USBEM_DTI.prototype = {
         return null;
     },
 
+    /**
+     * True when any alert references the incident. A just-created incident becomes
+     * visible to the reconcile rule and async linkers as soon as it is inserted, so it
+     * may already carry an alert by the time a race is detected. Unknown means yes.
+     */
+    isIncidentLinkedToAnyAlert: function (incidentSysId) {
+        var gr;
+        var linkField = '';
+        if (!this.core.looksLikeSysId(incidentSysId)) {
+            return true;
+        }
+        gr = new GlideRecord('em_alert');
+        if (gr.isValidField('task')) {
+            linkField = 'task';
+        } else if (gr.isValidField('incident')) {
+            linkField = 'incident';
+        }
+        if (!linkField) {
+            return true;
+        }
+        gr.addQuery(linkField, incidentSysId);
+        gr.setLimit(1);
+        this.queryNow(gr);
+        return gr.next();
+    },
+
     deleteIncidentBestEffort: function (incidentGr) {
         try {
             if (incidentGr && incidentGr.isValidRecord && incidentGr.isValidRecord()) {
@@ -563,35 +794,74 @@ USBEM_DTI.prototype = {
 
     createOrReuseIncidentForAlert: function (ctx, alertGr) {
         var existingIncident;
+        var linkedIncident;
+        var terminalIncidentSysId = '';
+        var skippedTerminal = false;
         var createdIncident;
         var claim;
         var refreshedAlert;
+        var alertSysId;
 
         if (!alertGr) {
             return { incident: null, status: 'alert_not_found' };
         }
 
-        refreshedAlert = this.getAlertBySysId(alertGr.getUniqueValue());
-        existingIncident = this.getIncidentFromAlert(refreshedAlert || alertGr);
-        if (existingIncident) {
-            return { incident: existingIncident, status: 'existing' };
+        alertSysId = alertGr.getUniqueValue();
+        refreshedAlert = this.getAlertBySysId(alertSysId);
+        linkedIncident = this.getIncidentFromAlert(refreshedAlert || alertGr);
+        if (linkedIncident) {
+            if (this.isIncidentReusable(linkedIncident, ctx.debug)) {
+                return { incident: linkedIncident, status: 'existing' };
+            }
+            // Remember the exact finished incident so the claim below can replace that
+            // one link, rather than either giving up or overwriting an unrelated owner.
+            terminalIncidentSysId = linkedIncident.getUniqueValue();
+            skippedTerminal = true;
+            this.core.tracePush(ctx.debug, 'terminal incident skipped on alert: ' + this.describeIncident(linkedIncident));
         }
 
         if (!ctx.dti.allow_incident) {
             return { incident: null, status: 'suppressed_by_severity_map' };
         }
 
+        // Only ever move an alert off one of our own incidents. A terminal task that
+        // some other process attached is left exactly where it is.
+        if (this.core.hasValue(terminalIncidentSysId) && !this.isUsbemDtiIncident(linkedIncident)) {
+            this.core.tracePush(ctx.debug, 'alert holds a foreign terminal task; leaving the alert link untouched');
+            terminalIncidentSysId = '';
+        }
+        if (this.core.hasValue(terminalIncidentSysId) && this.isClosedAlert(refreshedAlert || alertGr)) {
+            this.core.tracePush(ctx.debug, 'closed alert left on its terminal incident');
+            terminalIncidentSysId = '';
+        }
+
         existingIncident = this.getExistingIncidentByCorrelationId(ctx.mapped.message_key, ctx.debug);
         if (existingIncident) {
-            claim = this.claimAlertForIncident(alertGr.getUniqueValue(), existingIncident.getUniqueValue());
+            claim = this.claimAlertForIncident(alertSysId, existingIncident.getUniqueValue(), terminalIncidentSysId);
             if (claim.claimed) {
                 this.core.tracePush(ctx.debug, 'existing incident claimed onto alert by correlation_id');
+                if (claim.replaced) {
+                    this.core.tracePush(ctx.debug, 'alert relinked from terminal incident to ' + this.describeIncident(existingIncident));
+                    return { incident: existingIncident, status: 'claimed_from_terminal_incident' };
+                }
                 return { incident: existingIncident, status: 'existing_from_correlation_id' };
             }
-            if (claim.incident) {
+            if (claim.incident && claim.incident.getUniqueValue() === existingIncident.getUniqueValue()) {
+                this.core.tracePush(ctx.debug, 'alert already linked to the open correlation incident by a concurrent linker');
+                return { incident: existingIncident, status: skippedTerminal ? 'claimed_from_terminal_incident' : 'existing_from_correlation_id' };
+            }
+            if (claim.incident && this.isIncidentReusable(claim.incident, ctx.debug)) {
                 this.core.tracePush(ctx.debug, 'alert already linked while claiming existing correlation incident');
                 return { incident: claim.incident, status: 'existing_after_race' };
             }
+            // The alert could not be claimed: it holds a finished or foreign task we may
+            // not replace. The open incident for this key is still the right answer;
+            // creating another here would duplicate it.
+            this.core.tracePush(ctx.debug, 'open correlation incident returned without claiming the alert');
+            return {
+                incident: existingIncident,
+                status: (skippedTerminal || claim.incident) ? 'existing_after_terminal' : 'existing_unlinked'
+            };
         }
 
         createdIncident = this.createIncidentRecord(ctx);
@@ -599,16 +869,38 @@ USBEM_DTI.prototype = {
             return { incident: null, status: 'create_failed' };
         }
 
-        claim = this.claimAlertForIncident(alertGr.getUniqueValue(), createdIncident.getUniqueValue());
+        claim = this.claimAlertForIncident(alertSysId, createdIncident.getUniqueValue(), terminalIncidentSysId);
         if (claim.claimed) {
             this.core.tracePush(ctx.debug, 'incident created and linked: ' + createdIncident.getUniqueValue());
-            return { incident: createdIncident, status: 'created' };
+            if (claim.replaced) {
+                this.core.tracePush(ctx.debug, 'alert relinked from terminal incident to ' + this.describeIncident(createdIncident));
+                return { incident: createdIncident, status: 'relinked_from_terminal_incident' };
+            }
+            return {
+                incident: createdIncident,
+                status: skippedTerminal ? 'created_after_terminal' : 'created'
+            };
+        }
+
+        if (claim.incident && claim.incident.getUniqueValue() === createdIncident.getUniqueValue()) {
+            // Another actor (the reconcile rule or an async linker) already moved the alert
+            // onto the incident we just created. That is our own success, not a race lost.
+            this.core.tracePush(ctx.debug, 'alert already linked to the created incident by a concurrent linker');
+            return { incident: createdIncident, status: skippedTerminal ? 'relinked_from_terminal_incident' : 'created' };
         }
 
         if (claim.incident) {
-            this.core.tracePush(ctx.debug, 'incident race detected, existing linked incident reused');
-            this.deleteIncidentBestEffort(createdIncident);
-            return { incident: claim.incident, status: 'existing_after_race' };
+            // Only stand down for a live owner. A finished incident on the alert must
+            // never cost us the incident we just created and already have to return.
+            if (this.isIncidentReusable(claim.incident, ctx.debug)) {
+                this.core.tracePush(ctx.debug, 'incident race detected, existing linked incident reused');
+                if (!this.isIncidentLinkedToAnyAlert(createdIncident.getUniqueValue())) {
+                    this.deleteIncidentBestEffort(createdIncident);
+                }
+                return { incident: claim.incident, status: 'existing_after_race' };
+            }
+            this.core.tracePush(ctx.debug, 'terminal incident skipped on alert after claim race: ' + this.describeIncident(claim.incident));
+            return { incident: createdIncident, status: 'created_after_terminal' };
         }
 
         return { incident: createdIncident, status: 'created_unlinked' };
@@ -618,6 +910,7 @@ USBEM_DTI.prototype = {
         var gr;
         var preferredIncident = null;
         var candidateIncident;
+        var terminalStates;
         if (!this.core.hasValue(messageKey) || !this.core.tableExists('incident', trace)) {
             return null;
         }
@@ -626,6 +919,13 @@ USBEM_DTI.prototype = {
             return null;
         }
         gr.addQuery('correlation_id', messageKey);
+        // Terminal states are excluded in the query rather than after the fact, so the
+        // result set stays small as a key cycles through incident after incident.
+        terminalStates = this.getTerminalIncidentStates(trace);
+        if (terminalStates.length && gr.isValidField('state')) {
+            gr.addQuery('state', 'NOT IN', terminalStates.join(','));
+            this.core.tracePush(trace, 'terminal incident states excluded from correlation lookup: ' + terminalStates.join(','));
+        }
         if (gr.isValidField('sys_created_on')) {
             gr.orderBy('sys_created_on');
         }
@@ -787,6 +1087,7 @@ USBEM_DTI.prototype = {
         var mapOutcome;
         var waitedIncident;
         var createdIncident;
+        var skippedTerminal = false;
 
         if (!ctx.dti.allow_incident) {
             return { incident: null, status: 'suppressed_by_severity_map' };
@@ -794,17 +1095,23 @@ USBEM_DTI.prototype = {
 
         alertGr = this.findAlertByMessageKey(ctx.mapped.message_key, ctx.mapped.source, ctx.mapped.event_class, ctx.debug);
         if (alertGr) {
-            existingIncident = this.getIncidentFromAlert(alertGr);
+            existingIncident = this.getReusableIncidentFromAlert(alertGr, ctx.debug);
             if (existingIncident) {
                 this.upsertMapWithIncident(ctx.mapped.message_key, existingIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
                 return { incident: existingIncident, status: 'existing_from_alert' };
             }
+            // The previous alert for this key is still pointing at a finished incident.
+            // Fall through and open a new one; the async linker moves the alert across.
+            skippedTerminal = !!this.getIncidentFromAlert(alertGr);
         }
 
         existingIncident = this.getExistingIncidentByCorrelationId(ctx.mapped.message_key, ctx.debug);
         if (existingIncident) {
             this.upsertMapWithIncident(ctx.mapped.message_key, existingIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
-            return { incident: existingIncident, status: 'existing_from_correlation_id' };
+            return {
+                incident: existingIncident,
+                status: skippedTerminal ? 'existing_fast_after_terminal' : 'existing_from_correlation_id'
+            };
         }
 
         tableName = this.getDtiMapTable(ctx.debug);
@@ -830,7 +1137,10 @@ USBEM_DTI.prototype = {
         }
 
         this.upsertMapWithIncident(ctx.mapped.message_key, createdIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
-        return { incident: createdIncident, status: 'created_fast' };
+        return {
+            incident: createdIncident,
+            status: skippedTerminal ? 'created_fast_after_terminal' : 'created_fast'
+        };
     },
 
     buildAsyncLinkPayload: function (ctx, incidentGr, retryCount) {
@@ -845,10 +1155,15 @@ USBEM_DTI.prototype = {
     },
 
     parseAsyncLinkPayload: function (parm1, parm2) {
-        var parsed = this.core.tryParseJSON(parm2);
+        // A script action passes event.parm1/parm2 as GlideElement objects, not strings.
+        // Coerce before parsing: otherwise the payload is dropped, retry_count restarts at
+        // zero on every run, the retry cap never trips, and the retries never end.
+        var text = (parm2 === null || typeof parm2 === 'undefined') ? '' : String(parm2);
+        var eventSysId = (parm1 === null || typeof parm1 === 'undefined') ? '' : String(parm1);
+        var parsed = this.core.tryParseJSON(text);
         var out = this.core.isObject(parsed) ? parsed : {};
-        if (!this.core.hasValue(out.event_sys_id) && this.core.hasValue(parm1)) {
-            out.event_sys_id = String(parm1);
+        if (!this.core.hasValue(out.event_sys_id) && this.core.hasValue(eventSysId)) {
+            out.event_sys_id = eventSysId;
         }
         if (!this.core.hasValue(out.retry_count)) {
             out.retry_count = 0;
@@ -915,7 +1230,14 @@ USBEM_DTI.prototype = {
         try {
             if (typeof gs.eventQueueScheduled === 'function') {
                 processTime = new GlideDateTime();
-                processTime.addSecondsLocalTime(delaySeconds);
+                // Scoped GlideDateTime has addSeconds(); addSecondsLocalTime() exists only in
+                // global. The missing method threw here, the catch below re-queued at once,
+                // and retries ran back to back with no delay.
+                if (typeof processTime.addSeconds === 'function') {
+                    processTime.addSeconds(delaySeconds);
+                } else {
+                    processTime.addSecondsLocalTime(delaySeconds);
+                }
                 gs.eventQueueScheduled(eventName, incidentGr, payload.event_sys_id || '', payloadText, processTime);
             } else {
                 gs.eventQueue(eventName, incidentGr, payload.event_sys_id || '', payloadText);
@@ -962,6 +1284,88 @@ USBEM_DTI.prototype = {
         var claim;
         var maxRetries;
         var shouldRetry = false;
+        var trace = this.core.newTrace(true);
+        var self = this;
+
+        // This runs from a script action with no request context, so trace steps are
+        // returned with the outcome; the script action already logs the whole object.
+        function withTrace(outcome) {
+            if (trace.steps.length) {
+                outcome.trace = trace.steps.join(' | ');
+            }
+            return outcome;
+        }
+
+        // Only ever move an alert that is unlinked or still holds one of our incidents.
+        function alertIsOurs(currentIncident) {
+            return !currentIncident || self.isUsbemDtiIncident(currentIncident);
+        }
+
+        // The alert currently holds `holder`. Move it onto incidentGr when the rules say
+        // so, through the conditional claim: the write only lands if the alert still holds
+        // exactly `holder`, so a concurrent writer (or a foreign link) is never overwritten.
+        function relinkFrom(holder, note) {
+            var holderIsTerminal = !self.isIncidentReusable(holder, trace);
+            var relink;
+            var nowHolder;
+            var reason = '';
+
+            if (holderIsTerminal) {
+                self.core.tracePush(trace, 'terminal incident skipped on alert' + note + ': ' + self.describeIncident(holder));
+            }
+            if (!alertIsOurs(holder)) {
+                reason = 'alert holds a foreign task';
+            } else if (!self.shouldPreferFastIncident(payload, incidentGr, holder)) {
+                reason = 'preference kept the current incident';
+            } else {
+                relink = self.claimAlertForIncident(alertGr.getUniqueValue(), incidentGr.getUniqueValue(), holder.getUniqueValue());
+                if (relink.claimed) {
+                    self.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
+                    if (holderIsTerminal) {
+                        self.core.tracePush(trace, 'alert relinked from terminal incident ' + self.describeIncident(holder) +
+                            ' to ' + self.describeIncident(incidentGr));
+                    }
+                    return withTrace({
+                        status: holderIsTerminal ? 'relinked_from_terminal_incident' : 'relinked_to_fast_incident',
+                        alert_sys_id: alertGr.getUniqueValue(),
+                        incident_sys_id: incidentGr.getUniqueValue()
+                    });
+                }
+                // Someone changed the alert between our read and the claim. Report what it
+                // holds now and stop; the next event or reconcile pass decides again.
+                nowHolder = relink.incident;
+                if (nowHolder && nowHolder.getUniqueValue() === incidentGr.getUniqueValue()) {
+                    return withTrace({
+                        status: 'already_linked',
+                        alert_sys_id: alertGr.getUniqueValue(),
+                        incident_sys_id: incidentGr.getUniqueValue()
+                    });
+                }
+                if (!nowHolder) {
+                    // The alert now points at a non-incident task, a dangling sys_id, or
+                    // nothing we can read. Report the raw link rather than the stale holder.
+                    nowHolder = self.getAlertBySysId(alertGr.getUniqueValue());
+                    return withTrace({
+                        status: 'alert_link_changed',
+                        alert_sys_id: alertGr.getUniqueValue(),
+                        incident_sys_id: nowHolder && nowHolder.isValidField('incident') ? (nowHolder.getValue('incident') || '') : ''
+                    });
+                }
+                holder = nowHolder;
+                holderIsTerminal = !self.isIncidentReusable(holder, trace);
+                reason = 'alert changed before relink';
+            }
+
+            self.upsertMapWithIncident(payload.message_key, holder.getUniqueValue(), payload.event_sys_id, null);
+            if (holderIsTerminal) {
+                self.core.tracePush(trace, 'alert left on terminal incident ' + self.describeIncident(holder) + ': ' + reason);
+            }
+            return withTrace({
+                status: holderIsTerminal ? 'kept_terminal_incident' : 'already_linked',
+                alert_sys_id: alertGr.getUniqueValue(),
+                incident_sys_id: holder.getUniqueValue()
+            });
+        }
 
         payload = this.parseAsyncLinkPayload(parm1, parm2);
         if ((!incidentGr || !incidentGr.isValidRecord || !incidentGr.isValidRecord() ||
@@ -978,7 +1382,9 @@ USBEM_DTI.prototype = {
             alertGr = this.getAlertFromEvent(this.getEventBySysId(payload.event_sys_id));
         }
         if (!alertGr && this.core.hasValue(payload.message_key)) {
-            alertGr = this.findAlertByMessageKey(payload.message_key, payload.source, payload.event_class);
+            // A closed alert belongs to a finished incident cycle; linking this incident
+            // onto it would recreate the association this change removes.
+            alertGr = this.findAlertByMessageKey(payload.message_key, payload.source, payload.event_class, trace, { skip_closed_alerts: true });
         }
 
         if (!alertGr) {
@@ -986,86 +1392,68 @@ USBEM_DTI.prototype = {
             if (payload.retry_count < maxRetries) {
                 payload.retry_count = payload.retry_count + 1;
                 shouldRetry = this.queueScheduledLinkEvent(incidentGr, payload);
-                return {
+                return withTrace({
                     status: shouldRetry ? 'retry_queued' : 'alert_not_found',
                     retry_count: String(payload.retry_count)
-                };
+                });
             }
-            return {
+            return withTrace({
                 status: 'alert_not_found',
                 retry_count: String(payload.retry_count)
-            };
+            });
         }
 
         existingIncident = this.getIncidentFromAlert(alertGr);
         if (existingIncident) {
             if (existingIncident.getUniqueValue() === incidentGr.getUniqueValue()) {
                 this.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
-                return {
+                return withTrace({
                     status: 'already_linked',
                     alert_sys_id: alertGr.getUniqueValue(),
                     incident_sys_id: incidentGr.getUniqueValue()
-                };
+                });
             }
 
-            if (this.shouldPreferFastIncident(payload, incidentGr, existingIncident) &&
-                this.forceAlertForIncident(alertGr.getUniqueValue(), incidentGr.getUniqueValue())) {
-                this.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
-                return {
-                    status: 'relinked_to_fast_incident',
-                    alert_sys_id: alertGr.getUniqueValue(),
-                    incident_sys_id: incidentGr.getUniqueValue()
-                };
-            }
-
-            this.upsertMapWithIncident(payload.message_key, existingIncident.getUniqueValue(), payload.event_sys_id, null);
-            return {
-                status: 'already_linked',
-                alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: existingIncident.getUniqueValue()
-            };
+            // The event's own alert is authoritative for this cycle even if it has since
+            // closed; only the message-key fallback above skips Closed alerts.
+            return relinkFrom(existingIncident, '');
         }
 
         claim = this.claimAlertForIncident(alertGr.getUniqueValue(), incidentGr.getUniqueValue());
         if (claim.claimed) {
             this.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
-            return {
+            return withTrace({
                 status: 'linked',
                 alert_sys_id: alertGr.getUniqueValue(),
                 incident_sys_id: incidentGr.getUniqueValue()
-            };
+            });
         }
 
         if (claim.incident) {
-            if (this.shouldPreferFastIncident(payload, incidentGr, claim.incident) &&
-                this.forceAlertForIncident(alertGr.getUniqueValue(), incidentGr.getUniqueValue())) {
-                this.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
-                return {
-                    status: 'relinked_to_fast_incident',
+            if (claim.incident.getUniqueValue() === incidentGr.getUniqueValue()) {
+                return withTrace({
+                    status: 'already_linked',
                     alert_sys_id: alertGr.getUniqueValue(),
                     incident_sys_id: incidentGr.getUniqueValue()
-                };
+                });
             }
-
-            this.upsertMapWithIncident(payload.message_key, claim.incident.getUniqueValue(), payload.event_sys_id, null);
-            return {
-                status: 'already_linked',
-                alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: claim.incident.getUniqueValue()
-            };
+            return relinkFrom(claim.incident, ' after claim race');
         }
 
-        return {
+        return withTrace({
             status: 'link_failed',
             alert_sys_id: alertGr.getUniqueValue(),
             incident_sys_id: incidentGr.getUniqueValue()
-        };
+        });
     },
 
     reconcileAlertIncident: function (alertGr, trace) {
         var messageKey;
         var preferredIncident;
         var existingIncident;
+        var existingIsTerminal = false;
+        var claim;
+        var outcome;
 
         if (!alertGr || !alertGr.isValidRecord || !alertGr.isValidRecord()) {
             return { status: 'alert_missing' };
@@ -1074,6 +1462,12 @@ USBEM_DTI.prototype = {
         messageKey = alertGr.isValidField('message_key') ? (alertGr.getValue('message_key') || '') : '';
         if (!this.core.hasValue(messageKey)) {
             return { status: 'message_key_missing', alert_sys_id: alertGr.getUniqueValue() };
+        }
+
+        // A Closed alert keeps the incident of the cycle it closed with. Without this,
+        // any later update to an old alert would pull it onto the key's newest incident.
+        if (this.isClosedAlert(alertGr)) {
+            return { status: 'skipped_closed_alert', alert_sys_id: alertGr.getUniqueValue() };
         }
 
         preferredIncident = this.getExistingIncidentByCorrelationId(messageKey, trace);
@@ -1094,7 +1488,8 @@ USBEM_DTI.prototype = {
             };
         }
 
-        if (existingIncident && !this.shouldPreferFastIncident({ message_key: messageKey }, preferredIncident, existingIncident)) {
+        // Never take an alert away from a task some other process attached.
+        if (existingIncident && !this.isUsbemDtiIncident(existingIncident)) {
             return {
                 status: 'kept_existing',
                 alert_sys_id: alertGr.getUniqueValue(),
@@ -1102,18 +1497,51 @@ USBEM_DTI.prototype = {
             };
         }
 
-        if (this.forceAlertForIncident(alertGr.getUniqueValue(), preferredIncident.getUniqueValue())) {
+        if (existingIncident) {
+            existingIsTerminal = !this.isIncidentReusable(existingIncident, trace);
+            if (existingIsTerminal) {
+                this.core.tracePush(trace, 'terminal incident skipped on alert: ' + this.describeIncident(existingIncident));
+            }
+        }
+
+        if (existingIncident && !this.shouldPreferFastIncident({ message_key: messageKey }, preferredIncident, existingIncident)) {
             return {
-                status: existingIncident ? 'relinked_to_fast_incident' : 'linked',
+                status: existingIsTerminal ? 'kept_terminal_incident' : 'kept_existing',
                 alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: preferredIncident.getUniqueValue()
+                incident_sys_id: existingIncident.getUniqueValue()
             };
         }
 
+        // Conditional write: lands only if the alert is still unlinked or still holds the
+        // exact incident inspected above. A link to a non-incident task (which
+        // getIncidentFromAlert cannot see) or a concurrent writer's link is never replaced.
+        claim = this.claimAlertForIncident(alertGr.getUniqueValue(), preferredIncident.getUniqueValue(),
+            existingIncident ? existingIncident.getUniqueValue() : '');
+        if (claim.claimed) {
+            outcome = {
+                status: existingIsTerminal ? 'relinked_from_terminal_incident' :
+                    (existingIncident ? 'relinked_to_fast_incident' : 'linked'),
+                alert_sys_id: alertGr.getUniqueValue(),
+                incident_sys_id: preferredIncident.getUniqueValue()
+            };
+            if (existingIsTerminal) {
+                outcome.previous_incident_sys_id = existingIncident.getUniqueValue();
+                this.core.tracePush(trace, 'alert relinked from terminal incident ' + this.describeIncident(existingIncident) +
+                    ' to ' + this.describeIncident(preferredIncident));
+                // The reconcile business rule logs only linked/relinked_to_fast_incident and
+                // passes no trace, so this outcome is logged here to stay observable.
+                try {
+                    gs.info('USBEM DTI alert relinked from terminal incident: ' + this.core.safeJSONStringify(outcome));
+                } catch (eLog) {
+                }
+            }
+            return outcome;
+        }
+
         return {
-            status: 'link_failed',
+            status: 'kept_existing',
             alert_sys_id: alertGr.getUniqueValue(),
-            incident_sys_id: preferredIncident.getUniqueValue()
+            incident_sys_id: claim.incident ? claim.incident.getUniqueValue() : (alertGr.getValue('incident') || '')
         };
     },
 
