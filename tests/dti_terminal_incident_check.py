@@ -307,6 +307,50 @@ try {
 gs.print('@@JSON@@' + JSON.stringify(out));
 """
 
+
+SUPPORT_GROUP_JS = """
+var out = {};
+var core = new x_usbna_usb_event.USBEM_Core();
+var lookups = new x_usbna_usb_event.USBEM_Lookups(core);
+out.chain = lookups.CI_SUPPORT_GROUP_FIELDS;
+var probe = new GlideRecord('cmdb_ci'); probe.initialize();
+out.field_present = {};
+for (var f = 0; f < out.chain.length; f++) { out.field_present[out.chain[f]] = probe.isValidField(out.chain[f]); }
+
+// a) a CI with no support group resolves to nothing
+var ci = new GlideRecord('cmdb_ci'); ci.get('__CI__');
+out.ci = String(ci.getValue('name'));
+out.baseline = lookups.getSupportGroupForCi('__CI__', null).sys_id || '';
+
+// b) the level 2 field, when present, is used as the fallback
+var TIER = out.chain[out.chain.length - 1];
+out.tier_field = TIER;
+if (probe.isValidField(TIER) && TIER !== 'support_group') {
+    var restore = String(ci.getValue(TIER) || '');
+    ci.setValue(TIER, '__GROUP__'); ci.update();
+    var hit = lookups.getSupportGroupForCi('__CI__', null);
+    out.tier_result = { method: String(hit.method), group: String(hit.sys_id || '') };
+    var back = new GlideRecord('cmdb_ci'); back.get('__CI__');
+    back.setValue(TIER, restore); back.update();
+    var check = new GlideRecord('cmdb_ci'); check.get('__CI__');
+    out.reverted = String(check.getValue(TIER) || '') === restore;
+} else {
+    out.tier_result = { method: 'field not present on this instance', group: '' };
+    out.reverted = true;
+}
+
+// c) nothing resolves -> no assignment group at all (no default/dummy group)
+var p = { source: '__PREFIX__', event_class: '__PREFIX__', node: '__PREFIX__-no-such-host',
+    resource: '__PREFIX__', metric_name: '__PREFIX__', severity: '1',
+    message_key: '__PREFIX__-nogroup-probe', description: '__PREFIX__ no-group probe',
+    direct_to_incident: 'true' };
+var ctx = core.createRecordContext(p, {});
+lookups.resolveAll(ctx);
+out.unresolved_group = String(ctx.resolved.assignment_group_sys_id || '');
+out.dummy_used = ctx.resolved.dummy_assignment_group_used === true;
+gs.print('@@JSON@@' + JSON.stringify(out));
+"""
+
 CLEANUP_JS = """
 var out = {};
 [['incident', 'correlation_id'], ['incident', 'short_description'],
@@ -620,6 +664,34 @@ class Checker:
                     f"{'ended with alert_not_found' if finished else 'DID NOT STOP'}",
                     finished and len(events) <= retries + 1 and delayed >= 1, key=key)
 
+    def case_12(self) -> None:
+        """Assignment group comes from the CI support tiers, and there is no default group."""
+        ci = self.sn.table('cmdb_ci', 'support_groupISEMPTY^ORDERBYname', 'sys_id,name', limit=1)
+        grp = self.sn.table('sys_user_group', 'active=true^ORDERBYname', 'sys_id,name', limit=1)
+        if not ci or not grp:
+            self.record('12 CI support tiers', 'lookup', 'a CI without a support group and a group to point at',
+                        'no suitable CI or group on this instance', None)
+            return
+        out = self.run_js(SUPPORT_GROUP_JS, ci=ci[0]['sys_id'], group=grp[0]['sys_id'], prefix=self.prefix)
+        if not isinstance(out, dict) or 'chain' not in out:
+            self.record('12 CI support tiers', 'lookup', 'chain resolves and no default group',
+                        f'probe failed: {str(out)[:120]}', False)
+            return
+        tier = out.get('tier_result', {})
+        used_tier = tier.get('method') == 'cmdb_ci_' + out.get('tier_field', '')
+        skipped = tier.get('method') == 'field not present on this instance'
+        self.record('12a CI tier fallback', 'lookup',
+                    f"{out.get('tier_field')} used when support_group is empty",
+                    f"chain {out.get('chain')}; baseline {'empty' if not out.get('baseline') else 'unexpected group'}; "
+                    f"with tier set -> {tier.get('method')} ({grp[0]['name'] if used_tier else 'n/a'}); "
+                    f"CI restored={out.get('reverted')}",
+                    None if skipped else (used_tier and not out.get('baseline') and out.get('reverted')),
+                    ci=ci[0]['name'])
+        self.record('12b no default group', 'lookup', 'nothing resolves -> assignment group left empty',
+                    f"assignment_group={'(empty)' if not out.get('unresolved_group') else out.get('unresolved_group')}; "
+                    f"dummy_used={out.get('dummy_used')}",
+                    not out.get('unresolved_group') and not out.get('dummy_used'))
+
     def case_listener(self) -> None:
         """What REST callers actually get. Expected to fail while the listener inlines its own copy."""
         key = f"{self.prefix}-{self.run_id}-listener"
@@ -659,9 +731,10 @@ class Checker:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", default="both", choices=["fast", "wait", "both"])
-    parser.add_argument("--cases", default="1,2,3,6,7,8,9,10,11",
+    parser.add_argument("--cases", default="1,2,3,6,7,8,9,10,11,12",
                         help="comma-separated: 1 new key, 2 open, 3 terminal (with 4 and 5), 6 closed alert, "
-                             "7 concurrency, 8 non-DTI, 9 timing, 10 long keys, 11 retry bound")
+                             "7 concurrency, 8 non-DTI, 9 timing, 10 long keys, 11 retry bound, "
+                             "12 CI support tiers and no default group")
     parser.add_argument("--listener", action="store_true",
                         help="also push through the real connector endpoint (fails until the listener is rebuilt)")
     parser.add_argument("--prefix", default="ZZDTI", help="tag for every record this script creates")
@@ -691,6 +764,9 @@ def main() -> int:
         if "11" in cases:
             print("== async ==")
             checker.case_11()
+        if "12" in cases:
+            print("== assignment group ==")
+            checker.case_12()
         if args.listener:
             print("== listener (REST path) ==")
             checker.case_listener()

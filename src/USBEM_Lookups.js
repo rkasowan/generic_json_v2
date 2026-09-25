@@ -1615,9 +1615,20 @@ USBEM_Lookups.prototype = {
         return chosen;
     },
 
+    /**
+     * CI fields that name the group to assign, in priority order: the out-of-box support
+     * group first, then the level 2 support assignee group. Add further tiers (level 3)
+     * here; a field that does not exist on the instance is skipped, not an error.
+     */
+    CI_SUPPORT_GROUP_FIELDS: ['support_group', 'u_level_2_support_assignee_group'],
+
     getSupportGroupForCi: function (ciSysId, trace) {
         var gr;
+        var fieldName;
         var supportValue;
+        var available = false;
+        var i;
+
         if (!this.core.looksLikeSysId(ciSysId) || !this.core.tableExists('cmdb_ci', trace)) {
             return { sys_id: '', status: 'not_attempted', method: 'support_group' };
         }
@@ -1625,24 +1636,33 @@ USBEM_Lookups.prototype = {
         if (!gr.get(ciSysId)) {
             return { sys_id: '', status: 'not_found', method: 'support_group' };
         }
-        if (!gr.isValidField('support_group')) {
-            return { sys_id: '', status: 'lookup_unavailable', method: 'support_group' };
-        }
-        supportValue = gr.getValue('support_group');
-        if (this.core.looksLikeSysId(supportValue)) {
-            return {
-                sys_id: supportValue,
-                status: 'matched',
-                method: 'cmdb_ci_support_group',
-                match: {
+
+        for (i = 0; i < this.CI_SUPPORT_GROUP_FIELDS.length; i++) {
+            fieldName = this.CI_SUPPORT_GROUP_FIELDS[i];
+            if (!gr.isValidField(fieldName)) {
+                continue;
+            }
+            available = true;
+            supportValue = gr.getValue(fieldName);
+            if (this.core.looksLikeSysId(supportValue)) {
+                return {
                     sys_id: supportValue,
-                    name: gr.getDisplayValue('support_group'),
-                    score: 999,
-                    score_reasons: ['cmdb_ci_support_group']
-                },
-                count: 1,
-                rows: []
-            };
+                    status: 'matched',
+                    method: 'cmdb_ci_' + fieldName,
+                    match: {
+                        sys_id: supportValue,
+                        name: gr.getDisplayValue(fieldName),
+                        score: 999,
+                        score_reasons: ['cmdb_ci_' + fieldName]
+                    },
+                    count: 1,
+                    rows: []
+                };
+            }
+        }
+
+        if (!available) {
+            return { sys_id: '', status: 'lookup_unavailable', method: 'support_group' };
         }
         return { sys_id: '', status: 'not_found', method: 'cmdb_ci_support_group' };
     },
@@ -1798,7 +1818,6 @@ USBEM_Lookups.prototype = {
         var inputGroupMatch;
         var supportGroupMatch;
         var finalGroup = '';
-        var dummyGroup = '';
 
         if (this.core.hasValue(ctx.special.usbem_car_id)) {
             businessAppMatch = this.resolveBusinessAppByCarId(ctx.special.usbem_car_id, ctx.debug);
@@ -1851,13 +1870,10 @@ USBEM_Lookups.prototype = {
             }
         }
 
+        // No default assignment group: an incident nobody owns is better left unassigned
+        // than parked on a placeholder group where it goes unnoticed.
         if (!this.core.hasValue(finalGroup)) {
-            dummyGroup = this.core.getDefaultAssignmentGroupSysId(ctx.debug);
-            if (this.core.looksLikeSysId(dummyGroup)) {
-                finalGroup = dummyGroup;
-                ctx.resolved.dummy_assignment_group_used = true;
-                this.core.traceNote(ctx.debug, 'dummy assignment_group used');
-            }
+            this.core.traceNote(ctx.debug, 'no assignment group resolved; leaving the incident unassigned');
         }
 
         if (this.core.hasValue(finalGroup)) {
