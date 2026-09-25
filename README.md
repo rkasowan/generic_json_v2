@@ -20,6 +20,13 @@ The repo also includes ATF assets for environment testing:
 
 The Linux systemd synthetic under `synthetic/` runs every five minutes, validates DTI duplicate handling through live `em_event` and `incident` readback, removes the successful probe incident, emits an OK event, and creates a separately assigned DTI incident plus SMTP email only on failure. Installation and operations are documented in `kb/generic_json_v2_dti_linux_synthetic.md`.
 
+## Installing
+
+Starting from a clean instance: [docs/install_from_scratch.md](docs/install_from_scratch.md) walks
+through the scoped app, the four Script Includes, the inbound listener, the async linker, the
+reconcile rule, properties, the CI support tier fields, the cross-scope privileges and
+verification. Moving this work between existing instances: [docs/dti_transfer_package.md](docs/dti_transfer_package.md).
+
 ## Purpose
 
 This bundle gives you a custom **Instance** push connector transform for Event Management that accepts generic JSON, maps standard `em_event` fields when it can, and places everything else into the event's `additional_info` JSON string.
@@ -416,6 +423,7 @@ It covers a new key, an open incident in each open state, each terminal state an
 - `docs/atf_testing.md`
 - `docs/dti_transfer_package.md`
 - `docs/install_and_behavior.md`
+- `docs/install_from_scratch.md`
 - `servicenow/install_ci_support_tier_fields.background.js`
 - `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js`
 - `tests/dti_terminal_incident_check.py`
