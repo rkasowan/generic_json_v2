@@ -22,8 +22,9 @@ Notes per record:
 
 1. **USBEM_DTI** — stops reusing Resolved/Closed/Canceled incidents; bounds the async link
    retries. Scope `x_usbna_usb_event`.
-2. **USBEM_Lookups** — assignment group from `cmdb_ci.support_group`, then
-   `u_level_2_support_assignee_group`; the default/placeholder group fallback is removed.
+2. **USBEM_Lookups** — assignment group from the event's `assignment_group`, then
+   `cmdb_ci.support_group`, then `u_level_2_support_assignee_group`; the default/placeholder
+   group fallback is removed.
    Depends on section 2 for the CI fields (it skips fields that do not exist, so it is safe
    to move this first).
 3. **link_alert_later** — the source on dev382837 was stored with literal `\n` sequences and

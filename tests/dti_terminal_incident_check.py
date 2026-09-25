@@ -339,7 +339,29 @@ if (probe.isValidField(TIER) && TIER !== 'support_group') {
     out.reverted = true;
 }
 
-// c) nothing resolves -> no assignment group at all (no default/dummy group)
+// c) precedence: a group named on the event beats the CI's support group
+var CI_SG = '__CI_WITH_SG__', PAYLOAD_GROUP = '__PAYLOAD_GROUP__';
+function groupFor(withPayload, ciSysId) {
+    var p2 = { source: '__PREFIX__', event_class: '__PREFIX__', node: '__PREFIX__-no-such-host',
+        resource: '__PREFIX__', metric_name: '__PREFIX__', severity: '1',
+        message_key: '__PREFIX__-precedence', description: '__PREFIX__ precedence probe',
+        direct_to_incident: 'true' };
+    if (withPayload) { p2.assignment_group = PAYLOAD_GROUP; }
+    var c = core.createRecordContext(p2, {});
+    if (ciSysId) { c.resolved.cmdb_ci_sys_id = ciSysId; }   // skip CI matching; cmdb_rel_ci may be fenced
+    lookups.resolveAssignmentAndCorrelations(c);
+    return String(c.resolved.assignment_group_sys_id || '');
+}
+if (CI_SG) {
+    var ciGr = new GlideRecord('cmdb_ci'); ciGr.get(CI_SG);
+    out.ci_support_group = String(ciGr.getValue('support_group') || '');
+    out.with_payload = groupFor(true, CI_SG);
+    out.ci_only = groupFor(false, CI_SG);
+} else {
+    out.ci_support_group = out.with_payload = out.ci_only = '';
+}
+
+// d) nothing resolves -> no assignment group at all (no default/dummy group)
 var p = { source: '__PREFIX__', event_class: '__PREFIX__', node: '__PREFIX__-no-such-host',
     resource: '__PREFIX__', metric_name: '__PREFIX__', severity: '1',
     message_key: '__PREFIX__-nogroup-probe', description: '__PREFIX__ no-group probe',
@@ -672,7 +694,14 @@ class Checker:
             self.record('12 CI support tiers', 'lookup', 'a CI without a support group and a group to point at',
                         'no suitable CI or group on this instance', None)
             return
-        out = self.run_js(SUPPORT_GROUP_JS, ci=ci[0]['sys_id'], group=grp[0]['sys_id'], prefix=self.prefix)
+        with_sg = self.sn.table('cmdb_ci', 'support_groupISNOTEMPTY', 'sys_id,support_group', limit=1)
+        payload_group = ''
+        if with_sg:
+            other = self.sn.table('sys_user_group', f"active=true^sys_id!={with_sg[0]['support_group']}", 'name', limit=1)
+            payload_group = other[0]['name'] if other else ''
+        out = self.run_js(SUPPORT_GROUP_JS, ci=ci[0]['sys_id'], group=grp[0]['sys_id'], prefix=self.prefix,
+                          ci_with_sg=with_sg[0]['sys_id'] if (with_sg and payload_group) else '',
+                          payload_group=payload_group)
         if not isinstance(out, dict) or 'chain' not in out:
             self.record('12 CI support tiers', 'lookup', 'chain resolves and no default group',
                         f'probe failed: {str(out)[:120]}', False)
@@ -687,7 +716,17 @@ class Checker:
                     f"CI restored={out.get('reverted')}",
                     None if skipped else (used_tier and not out.get('baseline') and out.get('reverted')),
                     ci=ci[0]['name'])
-        self.record('12b no default group', 'lookup', 'nothing resolves -> assignment group left empty',
+        if out.get('ci_support_group'):
+            payload_wins = out.get('with_payload') and out.get('with_payload') != out.get('ci_support_group')
+            ci_used = out.get('ci_only') == out.get('ci_support_group')
+            self.record('12b precedence', 'lookup', 'a group named on the event beats the CI support group',
+                        f"with payload -> {'payload group' if payload_wins else 'CI group (WRONG)'}; "
+                        f"without payload -> {'CI support group' if ci_used else 'something else (WRONG)'}",
+                        bool(payload_wins and ci_used))
+        else:
+            self.record('12b precedence', 'lookup', 'a group named on the event beats the CI support group',
+                        'no CI with a support group on this instance', None)
+        self.record('12c no default group', 'lookup', 'nothing resolves -> assignment group left empty',
                     f"assignment_group={'(empty)' if not out.get('unresolved_group') else out.get('unresolved_group')}; "
                     f"dummy_used={out.get('dummy_used')}",
                     not out.get('unresolved_group') and not out.get('dummy_used'))

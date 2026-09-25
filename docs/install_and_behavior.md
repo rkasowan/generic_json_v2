@@ -219,7 +219,11 @@ Check:
 
 ### No assignment group on the incident
 
+The order is: `assignment_group` on the event, then `cmdb_ci.support_group`, then
+`cmdb_ci.u_level_2_support_assignee_group`, then unassigned.
+
 Check:
+- `assignment_group` on the payload, and whether the name resolved
 - `cmdb_ci.support_group` and `cmdb_ci.u_level_2_support_assignee_group` on the resolved CI
 - whether a CI resolved at all; with no CI there is nothing to read a group from
 - whether the scope can read `cmdb_rel_ci`. With `runtime_access_tracking = enforcing` and no privilege for that table, CI resolution throws `ScopeAccessNotGrantedException` before the group logic runs

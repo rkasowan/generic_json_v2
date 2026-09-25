@@ -1852,21 +1852,25 @@ USBEM_Lookups.prototype = {
             }
         }
 
-        if (this.core.hasValue(ctx.resolved.cmdb_ci_sys_id)) {
+        // Precedence: a group named on the event wins, then the CI's support group, then the
+        // CI's level 2 tier. The caller knows where the work should go; the CI is the fallback.
+        if (this.core.hasValue(ctx.special.assignment_group)) {
+            ctx.attempts.assignment_group = true;
+            inputGroupMatch = this.resolveAssignmentGroup(ctx.special.assignment_group, ctx.debug);
+            this.core.traceLookup(ctx.debug, 'assignment_group', inputGroupMatch);
+            if (inputGroupMatch && this.core.hasValue(inputGroupMatch.sys_id)) {
+                finalGroup = inputGroupMatch.sys_id;
+            }
+        }
+
+        // Only read the CI when the event did not name a group, so a supplied group costs
+        // nothing extra and cannot be overridden by CI data.
+        if (!this.core.hasValue(finalGroup) && this.core.hasValue(ctx.resolved.cmdb_ci_sys_id)) {
             supportGroupMatch = this.getSupportGroupForCi(ctx.resolved.cmdb_ci_sys_id, ctx.debug);
             this.core.traceLookup(ctx.debug, 'cmdb_ci_support_group', supportGroupMatch);
             if (supportGroupMatch && this.core.hasValue(supportGroupMatch.sys_id)) {
                 ctx.resolved.support_group_sys_id = supportGroupMatch.sys_id;
                 finalGroup = supportGroupMatch.sys_id;
-            }
-        }
-
-        if (this.core.hasValue(ctx.special.assignment_group)) {
-            ctx.attempts.assignment_group = true;
-            inputGroupMatch = this.resolveAssignmentGroup(ctx.special.assignment_group, ctx.debug);
-            this.core.traceLookup(ctx.debug, 'assignment_group', inputGroupMatch);
-            if (!this.core.hasValue(finalGroup) && inputGroupMatch && this.core.hasValue(inputGroupMatch.sys_id)) {
-                finalGroup = inputGroupMatch.sys_id;
             }
         }
 

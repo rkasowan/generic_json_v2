@@ -10,7 +10,8 @@ All notable project updates should be recorded here when work is completed and p
 - added distinct statuses and trace lines for terminal skips and relinks
 - fixed the async link retry, which had never run: script action parameters arrive as GlideElements so the payload was dropped and the retry cap never tripped, and scoped `GlideDateTime` has no `addSecondsLocalTime`, so retries re-queued with no delay. It now stops after the configured retries, spaced by the configured delay
 - repaired the `link_alert_later` Script Action source, which was stored with literal `\n` sequences and never compiled, and the event registration name
-- resolved the incident assignment group from `cmdb_ci.support_group`, then `cmdb_ci.u_level_2_support_assignee_group`, and removed the default/placeholder group so an unresolved incident is left unassigned
+- resolved the incident assignment group from the event's `assignment_group`, then `cmdb_ci.support_group`, then `cmdb_ci.u_level_2_support_assignee_group`, and removed the default/placeholder group so an unresolved incident is left unassigned
+- a group named on the event is no longer overridden by CI data, and the CI is only read when the event did not name one
 - added an idempotent installer for the two CI support tier reference fields
 - added `tests/dti_terminal_incident_check.py`, a self-cleaning live check, and `docs/dti_transfer_package.md` for manual export
 

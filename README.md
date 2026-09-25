@@ -208,14 +208,14 @@ Rules:
 
 The group on a DTI incident is resolved in this order:
 
-1. `cmdb_ci.support_group`
-2. `cmdb_ci.u_level_2_support_assignee_group`
-3. `assignment_group` from the payload
+1. `assignment_group` from the payload
+2. `cmdb_ci.support_group`
+3. `cmdb_ci.u_level_2_support_assignee_group`
 4. nothing — the incident is left unassigned
 
 The CI fields are an ordered list, `CI_SUPPORT_GROUP_FIELDS` in `src/USBEM_Lookups.js`; adding a level 3 tier is one entry. A field that does not exist on the instance is skipped rather than treated as an error, so the same code runs on instances that never got the custom fields. The lookup reports which field matched, for example `cmdb_ci_u_level_2_support_assignee_group`.
 
-Note that a CI-derived group beats an `assignment_group` supplied in the payload.
+A group named on the event wins: the caller knows where the work should go, and the CI is the fallback. The CI is only read when the event did not name a group.
 
 There is no default or placeholder group. An incident nobody owns is left unassigned rather than parked on a catch-all group where it goes unnoticed, so `x_usbna_usb_event.default_assignment_group_sys_id` is no longer read.
 
