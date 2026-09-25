@@ -2,6 +2,18 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.09.25.1 - 2026-09-25
+
+- stopped DTI reusing an incident once it is Resolved, Closed or Canceled: the next event for the key opens a new incident, later events reuse that one, and the alert is moved across
+- added `x_usbna_usb_event.dti_terminal_incident_states` (default `6,7,8`, integer states only, `0` acts as a kill switch) and excluded terminal states in the correlation query
+- made every alert write a conditional claim on the exact link inspected, so a foreign task, a Closed alert's incident or a concurrent writer is never overwritten
+- added distinct statuses and trace lines for terminal skips and relinks
+- fixed the async link retry, which had never run: script action parameters arrive as GlideElements so the payload was dropped and the retry cap never tripped, and scoped `GlideDateTime` has no `addSecondsLocalTime`, so retries re-queued with no delay. It now stops after the configured retries, spaced by the configured delay
+- repaired the `link_alert_later` Script Action source, which was stored with literal `\n` sequences and never compiled, and the event registration name
+- resolved the incident assignment group from `cmdb_ci.support_group`, then `cmdb_ci.u_level_2_support_assignee_group`, and removed the default/placeholder group so an unresolved incident is left unassigned
+- added an idempotent installer for the two CI support tier reference fields
+- added `tests/dti_terminal_incident_check.py`, a self-cleaning live check, and `docs/dti_transfer_package.md` for manual export
+
 ## 2026.09.10.2 - 2026-09-10
 
 - allowed staged rollout by treating an empty instance URL as a skipped slot
