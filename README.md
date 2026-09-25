@@ -128,30 +128,47 @@ It also supports these helper inputs:
 
 ### DTI without waiting
 
-If `direct_to_incident=true` and `dti_wait_for_incident` is not true:
+`direct_to_incident: true` returns an incident in the same response:
+
 - the event is inserted normally
-- the connector reuses the key's open incident, or opens a new one, and returns it in the same response
-- DTI breadcrumbs stay in `additional_info`
-- `dti_impact` / `dti_urgency` are always present in `additional_info`
-- if `dti_short_description` is not provided, it is auto-filled from event `description`
-- nothing touches the alert during the request; the link is made afterwards
+- the connector reuses the key's open incident, or opens a new one
+- the incident comes back in the response; nothing waits for Event Management
+- the alert is attached afterwards by the `USBEM Fast DTI Alert Reconcile` business rule, the
+  moment Event Management creates it
 
-Two actors attach the alert, and either may win:
-- the queued `x_usbna_usb_event.link_alert_later` event, handled by the `link_alert_later` Script Action, which calls `relinkAlertToIncidentAsync`. If Event Management has not built the alert yet it re-queues itself, `fast_dti_link_delay_seconds` apart (10 by default), up to `fast_dti_link_max_retries` times (6), then stops with `alert_not_found`.
-- the async `em_alert` reconcile rule in [servicenow/USBEM_FastDtiAlertReconcile.business_rule.js](servicenow/USBEM_FastDtiAlertReconcile.business_rule.js), which fires as soon as the alert is created or updated.
-
-Both write through the same conditional claim, so the loser reports what it found instead of overwriting it. Whichever runs second typically logs `already_linked`.
-
-Note that this path returns before the alert exists, so `usbem_wait_for_alert` has no effect when it is combined with `direct_to_incident=true` and `dti_wait_for_incident=false`: no alert identifiers come back.
+There are no queued events, no Script Actions and no retry loop. The business rule is a
+synchronous `after` rule with a condition, because Event Management best practices say plainly:
+"Do not write async business rules for alert tables."
 
 ### DTI with waiting
 
-If `direct_to_incident=true` and `dti_wait_for_incident=true`:
-- the event is inserted
-- the connector waits for alert generation
-- if the alert already has a **reusable** incident, that incident is returned
-- otherwise the connector creates an incident and links it to the alert during the request
-- the response includes event / alert / incident identifiers
+`dti_wait_for_incident: true` keeps the original behaviour: insert, poll for the alert, reuse a
+reusable linked incident or create one and link it inside the request. Slower, and only needed if
+you want the alert identifiers back in the same response.
+
+### Incident fields
+
+The endpoint replaces a direct write to the incident table, so send incident fields under their
+real names and they are written as-is:
+
+```json
+{
+  "source": "MyApp Monitor", "node": "VM1234", "severity": "1",
+  "description": "Service is down", "direct_to_incident": "true",
+  "caller_id": "Abel Tuter", "category": "Software", "subcategory": "Email",
+  "contact_type": "Integration", "work_notes": "note for the incident",
+  "alert_work_notes": "note for the alert"
+}
+```
+
+- any field that exists on `incident` is accepted; `sys_id`, `number`, `correlation_id` and
+  `correlation_display` are owned by the connector and ignored
+- a 32-character value is used as a sys_id, anything else is resolved as a display value, so
+  `"category": "Software"` and `"caller_id": "Abel Tuter"` both work
+- what was applied and what was ignored comes back as `incident_fields_applied` and
+  `incident_fields_skipped`
+- `work_notes` goes on the incident, `alert_work_notes` on the alert; the legacy
+  `dti_work_note` still works
 
 ### Terminal incidents end the reuse window
 

@@ -14,16 +14,10 @@ var USBEM_DTI = Class.create();
 USBEM_DTI.prototype = {
     initialize: function (core) {
         this.core = core;
-        this.PROPERTY_FAST_DTI_EVENT_NAME = 'x_usbna_usb_event.fast_dti_event_name';
-        this.PROPERTY_FAST_DTI_LINK_DELAY_SECONDS = 'x_usbna_usb_event.fast_dti_link_delay_seconds';
-        this.PROPERTY_FAST_DTI_LINK_MAX_RETRIES = 'x_usbna_usb_event.fast_dti_link_max_retries';
         this.PROPERTY_DTI_MAP_TABLE = 'x_usbna_usb_event.dti_map_table';
         this.PROPERTY_DTI_MAP_PENDING_WAIT_MS = 'x_usbna_usb_event.dti_map_pending_wait_ms';
         this.PROPERTY_DTI_TERMINAL_INCIDENT_STATES = 'x_usbna_usb_event.dti_terminal_incident_states';
 
-        this.DEFAULT_FAST_DTI_EVENT_NAME = 'x_usbna_usb_event.link_alert_later';
-        this.DEFAULT_FAST_DTI_LINK_DELAY_SECONDS = 10;
-        this.DEFAULT_FAST_DTI_LINK_MAX_RETRIES = 6;
         this.DEFAULT_DTI_MAP_PENDING_WAIT_MS = 1500;
         this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES = '6,7,8';
         this.PENDING_MAP_POLL_MS = 100;
@@ -42,26 +36,9 @@ USBEM_DTI.prototype = {
         return this.core.toInt(this.core.getProperty(name, String(defaultValue), trace), defaultValue);
     },
 
-    getFastDtiEventName: function (trace) {
-        return this.getStringProperty(this.PROPERTY_FAST_DTI_EVENT_NAME, this.DEFAULT_FAST_DTI_EVENT_NAME, trace);
-    },
-
-    getFastDtiLinkDelaySeconds: function (trace) {
-        var n = this.getIntProperty(this.PROPERTY_FAST_DTI_LINK_DELAY_SECONDS, this.DEFAULT_FAST_DTI_LINK_DELAY_SECONDS, trace);
-        if (n < 0) {
-            n = this.DEFAULT_FAST_DTI_LINK_DELAY_SECONDS;
-        }
-        return n;
-    },
-
-    getFastDtiLinkMaxRetries: function (trace) {
-        var n = this.getIntProperty(this.PROPERTY_FAST_DTI_LINK_MAX_RETRIES, this.DEFAULT_FAST_DTI_LINK_MAX_RETRIES, trace);
-        if (n < 0) {
-            n = this.DEFAULT_FAST_DTI_LINK_MAX_RETRIES;
-        }
-        return n;
-    },
-
+    
+    
+    
     getDtiMapPendingWaitMs: function (trace) {
         var n = this.getIntProperty(this.PROPERTY_DTI_MAP_PENDING_WAIT_MS, this.DEFAULT_DTI_MAP_PENDING_WAIT_MS, trace);
         if (n < 0) {
@@ -303,7 +280,7 @@ USBEM_DTI.prototype = {
         return stateInfo.normalized === '' || stateInfo.normalized === 'ready';
     },
 
-    findAlertByMessageKey: function (messageKey, source, eventClass, trace, options) {
+    findAlertByMessageKey: function (messageKey, source, eventClass, trace) {
         var gr;
         if (!this.core.hasValue(messageKey) || !this.core.tableExists('em_alert', trace)) {
             return null;
@@ -318,11 +295,6 @@ USBEM_DTI.prototype = {
         }
         if (this.core.hasValue(eventClass) && gr.isValidField('event_class')) {
             gr.addQuery('event_class', eventClass);
-        }
-        // The async linker must not fall back onto a closed alert from a previous
-        // incident cycle; other callers still want the most recent alert of any state.
-        if (options && options.skip_closed_alerts === true && gr.isValidField('state')) {
-            gr.addQuery('state', '!=', 'Closed');
         }
         if (gr.isValidField('sys_updated_on')) {
             gr.orderByDesc('sys_updated_on');
@@ -498,11 +470,42 @@ USBEM_DTI.prototype = {
         if (!this.core.hasValue(value)) {
             return;
         }
+        // Journal fields only take dot assignment; setValue() is dropped without an error.
         if (incGr.isValidField('work_notes')) {
-            incGr.setValue('work_notes', String(value));
+            incGr.work_notes = String(value);
         } else if (incGr.isValidField('comments')) {
-            incGr.setValue('comments', String(value));
+            incGr.comments = String(value);
         }
+    },
+
+    /**
+     * Post a sender-supplied work note onto the alert.
+     * The alert does not exist while the request is being served, so the note travels in the
+     * event's additional_info and is written when the alert is first handled. "alert_work_notes"
+     * always targets the alert; a plain "work_notes" targets the alert only when there is no
+     * incident to put it on, so a non-DTI sender can still annotate their alert.
+     */
+    applyAlertWorkNote: function (alertGr, hasIncident) {
+        var info;
+        var note;
+
+        if (!alertGr || !alertGr.isValidField('work_notes') || !alertGr.isValidField('additional_info')) {
+            return false;
+        }
+        info = this.core.tryParseJSON(String(alertGr.getValue('additional_info') || ''));
+        if (!this.core.isObject(info)) {
+            return false;
+        }
+        note = this.core.hasValue(info.alert_work_notes) ? info.alert_work_notes :
+            (!hasIncident && this.core.hasValue(info.work_notes) ? info.work_notes : '');
+        if (!this.core.hasValue(note)) {
+            return false;
+        }
+        // work_notes is a journal_input: setValue() is silently dropped, dot assignment is what
+        // actually registers the entry.
+        alertGr.work_notes = String(note);
+        alertGr.update();
+        return true;
     },
 
     setCorrelationIfPresent: function (incGr, ctx) {
@@ -703,6 +706,65 @@ USBEM_DTI.prototype = {
         return preferredIncident;
     },
 
+    /**
+     * Fields the connector owns. Everything else on the incident is fair game.
+     */
+    RESERVED_INCIDENT_FIELDS: ['sys_id', 'number', 'correlation_id', 'correlation_display'],
+
+    /**
+     * Write sender-supplied incident fields straight through, under their real names.
+     * This endpoint replaces a direct write to the incident table, so a sender sets caller_id,
+     * category, subcategory, contact_type or any other incident field exactly as they would
+     * have on the record itself.
+     *
+     * The source is the payload keys the connector did not consume as event fields, so standard
+     * event keys (source, node, severity, description and their aliases) can never leak in. A
+     * 32-character value is written as-is; anything else goes through setDisplayValue, so
+     * "category": "Software" or "caller_id": "Abel Tuter" work as written. A name that is not a
+     * real incident field is skipped and reported rather than guessed at.
+     */
+    applyRequestedIncidentFields: function (incGr, ctx) {
+        var applied = [];
+        var skipped = [];
+        var source = this.core.isObject(ctx.user_additional_info) ? ctx.user_additional_info : {};
+        var field;
+        var value;
+
+        for (field in source) {
+            if (!this.core.hasOwn(source, field)) {
+                continue;
+            }
+            value = source[field];
+            if (!this.core.hasValue(value) || this.core.isObject(value) || this.core.isArray(value)) {
+                continue;
+            }
+            if (this.RESERVED_INCIDENT_FIELDS.indexOf(field) >= 0 || !incGr.isValidField(field)) {
+                continue;
+            }
+            try {
+                if (this.core.looksLikeSysId(value)) {
+                    incGr.setValue(field, String(value));
+                } else {
+                    // Scoped GlideRecord has no setDisplayValue; the element does. This is what
+                    // resolves "Software" to a choice value and "Abel Tuter" to a user sys_id.
+                    incGr.getElement(field).setDisplayValue(String(value));
+                }
+                applied.push(field);
+            } catch (eField) {
+                skipped.push(field);
+            }
+        }
+
+        if (applied.length) {
+            ctx.result.incident_fields_applied = applied.join(',');
+            this.core.tracePush(ctx.debug, 'incident fields from payload: ' + applied.join(','));
+        }
+        if (skipped.length) {
+            ctx.result.incident_fields_skipped = skipped.join(',');
+            this.core.tracePush(ctx.debug, 'incident fields skipped: ' + skipped.join(','));
+        }
+    },
+
     createIncidentRecord: function (ctx) {
         var inc;
         var sysId;
@@ -742,6 +804,10 @@ USBEM_DTI.prototype = {
         if (this.core.hasValue(ctx.resolved.cmdb_ci_service_offering) && this.core.looksLikeSysId(ctx.resolved.cmdb_ci_service_offering) && inc.isValidField('service_offering')) {
             inc.setValue('service_offering', ctx.resolved.cmdb_ci_service_offering);
         }
+
+        // Sender-supplied fields last, so an explicitly supplied caller_id, category or any
+        // other incident field wins over anything derived above.
+        this.applyRequestedIncidentFields(inc, ctx);
 
         this.setWorkNotesIfPresent(inc, ctx.special.dti_work_note);
 
@@ -1143,310 +1209,13 @@ USBEM_DTI.prototype = {
         };
     },
 
-    buildAsyncLinkPayload: function (ctx, incidentGr, retryCount) {
-        return this.core.safeJSONStringify({
-            event_sys_id: ctx.result.event_sys_id || '',
-            incident_sys_id: incidentGr ? (incidentGr.getUniqueValue() || '') : '',
-            message_key: ctx.mapped.message_key || '',
-            source: ctx.mapped.source || '',
-            event_class: ctx.mapped.event_class || '',
-            retry_count: typeof retryCount === 'number' ? retryCount : 0
-        });
-    },
-
-    parseAsyncLinkPayload: function (parm1, parm2) {
-        // A script action passes event.parm1/parm2 as GlideElement objects, not strings.
-        // Coerce before parsing: otherwise the payload is dropped, retry_count restarts at
-        // zero on every run, the retry cap never trips, and the retries never end.
-        var text = (parm2 === null || typeof parm2 === 'undefined') ? '' : String(parm2);
-        var eventSysId = (parm1 === null || typeof parm1 === 'undefined') ? '' : String(parm1);
-        var parsed = this.core.tryParseJSON(text);
-        var out = this.core.isObject(parsed) ? parsed : {};
-        if (!this.core.hasValue(out.event_sys_id) && this.core.hasValue(eventSysId)) {
-            out.event_sys_id = eventSysId;
-        }
-        if (!this.core.hasValue(out.retry_count)) {
-            out.retry_count = 0;
-        } else {
-            out.retry_count = this.core.toInt(out.retry_count, 0);
-        }
-        return out;
-    },
-
-    getQueueIncidentRecord: function (incidentGr) {
-        var freshIncident;
-        if (!incidentGr || !incidentGr.isValidRecord || !incidentGr.isValidRecord()) {
-            return null;
-        }
-        if (this.core.looksLikeSysId(incidentGr.getUniqueValue())) {
-            freshIncident = this.getIncidentBySysId(incidentGr.getUniqueValue());
-            if (freshIncident) {
-                return freshIncident;
-            }
-        }
-        return incidentGr;
-    },
-
-    queueImmediateLinkEvent: function (incidentGr, payload, trace) {
-        var eventName;
-        var payloadText;
-        incidentGr = this.getQueueIncidentRecord(incidentGr);
-        if (!incidentGr) {
-            return false;
-        }
-
-        eventName = this.getFastDtiEventName(trace);
-        if (!this.core.hasValue(eventName)) {
-            return false;
-        }
-
-        payloadText = this.core.isObject(payload) ? this.core.safeJSONStringify(payload) : String(payload || '');
-        try {
-            gs.eventQueue(eventName, incidentGr, payload.event_sys_id || '', payloadText);
-            return true;
-        } catch (eQueue) {
-            return false;
-        }
-    },
-
-    queueScheduledLinkEvent: function (incidentGr, payload, trace) {
-        var eventName;
-        var delaySeconds;
-        var processTime;
-        var payloadText;
-        incidentGr = this.getQueueIncidentRecord(incidentGr);
-        if (!incidentGr) {
-            return false;
-        }
-
-        delaySeconds = this.getFastDtiLinkDelaySeconds(trace);
-        payloadText = this.core.isObject(payload) ? this.core.safeJSONStringify(payload) : String(payload || '');
-
-        eventName = this.getFastDtiEventName(trace);
-        if (!this.core.hasValue(eventName)) {
-            return false;
-        }
-
-        try {
-            if (typeof gs.eventQueueScheduled === 'function') {
-                processTime = new GlideDateTime();
-                // Scoped GlideDateTime has addSeconds(); addSecondsLocalTime() exists only in
-                // global. The missing method threw here, the catch below re-queued at once,
-                // and retries ran back to back with no delay.
-                if (typeof processTime.addSeconds === 'function') {
-                    processTime.addSeconds(delaySeconds);
-                } else {
-                    processTime.addSecondsLocalTime(delaySeconds);
-                }
-                gs.eventQueueScheduled(eventName, incidentGr, payload.event_sys_id || '', payloadText, processTime);
-            } else {
-                gs.eventQueue(eventName, incidentGr, payload.event_sys_id || '', payloadText);
-            }
-            return true;
-        } catch (eQueue) {
-            try {
-                gs.eventQueue(eventName, incidentGr, payload.event_sys_id || '', payloadText);
-                return true;
-            } catch (eQueueFallback) {
-                return false;
-            }
-        }
-    },
-
-    queueAlertLinkLater: function (ctx, incidentGr) {
-        var payload;
-        var queued;
-        if (!incidentGr) {
-            return false;
-        }
-        payload = {
-            event_sys_id: ctx.result.event_sys_id || '',
-            incident_sys_id: incidentGr.getUniqueValue() || '',
-            message_key: ctx.mapped.message_key || '',
-            source: ctx.mapped.source || '',
-            event_class: ctx.mapped.event_class || '',
-            retry_count: 0
-        };
-        queued = this.queueImmediateLinkEvent(incidentGr, payload, ctx.debug);
-        if (queued === true) {
-            ctx.result.dti_link_status = 'queued';
-            ctx.result.dti_link_event_name = this.getFastDtiEventName(ctx.debug);
-        } else {
-            ctx.result.dti_link_status = 'queue_failed';
-        }
-        return queued;
-    },
-
-    relinkAlertToIncidentAsync: function (incidentGr, parm1, parm2) {
-        var payload;
-        var alertGr = null;
-        var existingIncident;
-        var claim;
-        var maxRetries;
-        var shouldRetry = false;
-        var trace = this.core.newTrace(true);
-        var self = this;
-
-        // This runs from a script action with no request context, so trace steps are
-        // returned with the outcome; the script action already logs the whole object.
-        function withTrace(outcome) {
-            if (trace.steps.length) {
-                outcome.trace = trace.steps.join(' | ');
-            }
-            return outcome;
-        }
-
-        // Only ever move an alert that is unlinked or still holds one of our incidents.
-        function alertIsOurs(currentIncident) {
-            return !currentIncident || self.isUsbemDtiIncident(currentIncident);
-        }
-
-        // The alert currently holds `holder`. Move it onto incidentGr when the rules say
-        // so, through the conditional claim: the write only lands if the alert still holds
-        // exactly `holder`, so a concurrent writer (or a foreign link) is never overwritten.
-        function relinkFrom(holder, note) {
-            var holderIsTerminal = !self.isIncidentReusable(holder, trace);
-            var relink;
-            var nowHolder;
-            var reason = '';
-
-            if (holderIsTerminal) {
-                self.core.tracePush(trace, 'terminal incident skipped on alert' + note + ': ' + self.describeIncident(holder));
-            }
-            if (!alertIsOurs(holder)) {
-                reason = 'alert holds a foreign task';
-            } else if (!self.shouldPreferFastIncident(payload, incidentGr, holder)) {
-                reason = 'preference kept the current incident';
-            } else {
-                relink = self.claimAlertForIncident(alertGr.getUniqueValue(), incidentGr.getUniqueValue(), holder.getUniqueValue());
-                if (relink.claimed) {
-                    self.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
-                    if (holderIsTerminal) {
-                        self.core.tracePush(trace, 'alert relinked from terminal incident ' + self.describeIncident(holder) +
-                            ' to ' + self.describeIncident(incidentGr));
-                    }
-                    return withTrace({
-                        status: holderIsTerminal ? 'relinked_from_terminal_incident' : 'relinked_to_fast_incident',
-                        alert_sys_id: alertGr.getUniqueValue(),
-                        incident_sys_id: incidentGr.getUniqueValue()
-                    });
-                }
-                // Someone changed the alert between our read and the claim. Report what it
-                // holds now and stop; the next event or reconcile pass decides again.
-                nowHolder = relink.incident;
-                if (nowHolder && nowHolder.getUniqueValue() === incidentGr.getUniqueValue()) {
-                    return withTrace({
-                        status: 'already_linked',
-                        alert_sys_id: alertGr.getUniqueValue(),
-                        incident_sys_id: incidentGr.getUniqueValue()
-                    });
-                }
-                if (!nowHolder) {
-                    // The alert now points at a non-incident task, a dangling sys_id, or
-                    // nothing we can read. Report the raw link rather than the stale holder.
-                    nowHolder = self.getAlertBySysId(alertGr.getUniqueValue());
-                    return withTrace({
-                        status: 'alert_link_changed',
-                        alert_sys_id: alertGr.getUniqueValue(),
-                        incident_sys_id: nowHolder && nowHolder.isValidField('incident') ? (nowHolder.getValue('incident') || '') : ''
-                    });
-                }
-                holder = nowHolder;
-                holderIsTerminal = !self.isIncidentReusable(holder, trace);
-                reason = 'alert changed before relink';
-            }
-
-            self.upsertMapWithIncident(payload.message_key, holder.getUniqueValue(), payload.event_sys_id, null);
-            if (holderIsTerminal) {
-                self.core.tracePush(trace, 'alert left on terminal incident ' + self.describeIncident(holder) + ': ' + reason);
-            }
-            return withTrace({
-                status: holderIsTerminal ? 'kept_terminal_incident' : 'already_linked',
-                alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: holder.getUniqueValue()
-            });
-        }
-
-        payload = this.parseAsyncLinkPayload(parm1, parm2);
-        if ((!incidentGr || !incidentGr.isValidRecord || !incidentGr.isValidRecord() ||
-                (typeof incidentGr.getTableName === 'function' && incidentGr.getTableName() !== 'incident')) &&
-                this.core.looksLikeSysId(payload.incident_sys_id)) {
-            incidentGr = this.getIncidentBySysId(payload.incident_sys_id);
-        }
-        if (!incidentGr || !incidentGr.isValidRecord || !incidentGr.isValidRecord() ||
-                (typeof incidentGr.getTableName === 'function' && incidentGr.getTableName() !== 'incident')) {
-            return { status: 'incident_missing' };
-        }
-
-        if (this.core.looksLikeSysId(payload.event_sys_id)) {
-            alertGr = this.getAlertFromEvent(this.getEventBySysId(payload.event_sys_id));
-        }
-        if (!alertGr && this.core.hasValue(payload.message_key)) {
-            // A closed alert belongs to a finished incident cycle; linking this incident
-            // onto it would recreate the association this change removes.
-            alertGr = this.findAlertByMessageKey(payload.message_key, payload.source, payload.event_class, trace, { skip_closed_alerts: true });
-        }
-
-        if (!alertGr) {
-            maxRetries = this.getFastDtiLinkMaxRetries();
-            if (payload.retry_count < maxRetries) {
-                payload.retry_count = payload.retry_count + 1;
-                shouldRetry = this.queueScheduledLinkEvent(incidentGr, payload);
-                return withTrace({
-                    status: shouldRetry ? 'retry_queued' : 'alert_not_found',
-                    retry_count: String(payload.retry_count)
-                });
-            }
-            return withTrace({
-                status: 'alert_not_found',
-                retry_count: String(payload.retry_count)
-            });
-        }
-
-        existingIncident = this.getIncidentFromAlert(alertGr);
-        if (existingIncident) {
-            if (existingIncident.getUniqueValue() === incidentGr.getUniqueValue()) {
-                this.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
-                return withTrace({
-                    status: 'already_linked',
-                    alert_sys_id: alertGr.getUniqueValue(),
-                    incident_sys_id: incidentGr.getUniqueValue()
-                });
-            }
-
-            // The event's own alert is authoritative for this cycle even if it has since
-            // closed; only the message-key fallback above skips Closed alerts.
-            return relinkFrom(existingIncident, '');
-        }
-
-        claim = this.claimAlertForIncident(alertGr.getUniqueValue(), incidentGr.getUniqueValue());
-        if (claim.claimed) {
-            this.upsertMapWithIncident(payload.message_key, incidentGr.getUniqueValue(), payload.event_sys_id, null);
-            return withTrace({
-                status: 'linked',
-                alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: incidentGr.getUniqueValue()
-            });
-        }
-
-        if (claim.incident) {
-            if (claim.incident.getUniqueValue() === incidentGr.getUniqueValue()) {
-                return withTrace({
-                    status: 'already_linked',
-                    alert_sys_id: alertGr.getUniqueValue(),
-                    incident_sys_id: incidentGr.getUniqueValue()
-                });
-            }
-            return relinkFrom(claim.incident, ' after claim race');
-        }
-
-        return withTrace({
-            status: 'link_failed',
-            alert_sys_id: alertGr.getUniqueValue(),
-            incident_sys_id: incidentGr.getUniqueValue()
-        });
-    },
-
+    
+    
+    
+    
+    
+    
+    
     reconcileAlertIncident: function (alertGr, trace) {
         var messageKey;
         var preferredIncident;
@@ -1454,6 +1223,7 @@ USBEM_DTI.prototype = {
         var existingIsTerminal = false;
         var claim;
         var outcome;
+        var noteWritten = false;
 
         if (!alertGr || !alertGr.isValidRecord || !alertGr.isValidRecord()) {
             return { status: 'alert_missing' };
@@ -1470,12 +1240,15 @@ USBEM_DTI.prototype = {
             return { status: 'skipped_closed_alert', alert_sys_id: alertGr.getUniqueValue() };
         }
 
+        noteWritten = this.applyAlertWorkNote(alertGr, this.core.looksLikeSysId(alertGr.getValue('incident')));
+
         preferredIncident = this.getExistingIncidentByCorrelationId(messageKey, trace);
         if (!preferredIncident || !this.isUsbemDtiIncident(preferredIncident)) {
             return {
                 status: 'no_usbemdti_incident',
                 alert_sys_id: alertGr.getUniqueValue(),
-                message_key: messageKey
+                message_key: messageKey,
+                alert_work_note: noteWritten
             };
         }
 
@@ -1556,8 +1329,9 @@ USBEM_DTI.prototype = {
         ctx.result.dti_incident_status = outcome.status || '';
         if (outcome.incident) {
             this.core.mergeDeep(ctx.result, this.core.summarizeIncident(outcome.incident));
-            this.queueAlertLinkLater(ctx, outcome.incident);
         }
+        // Nothing is queued here. The alert does not exist yet, and the em_alert business rule
+        // links it the moment Event Management creates it.
         return ctx.result;
     },
 

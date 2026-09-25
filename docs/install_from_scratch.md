@@ -57,17 +57,17 @@ instance record for it — the listener alone serves:
 
 Two ways to install it. Pick one and understand the trade.
 
-### Option A — delegate to the Script Includes (recommended) [not verified here]
+### Option A — delegate to the Script Includes (recommended) [verified]
 
 Create `sn_em_connector_listener` **inside the `x_usbna_usb_event` scope** with the script from
 `src/USBEM_genericJsonV2.js`, which constructs `USBEM_Core`, `USBEM_Lookups`, `USBEM_Debug` and
 `USBEM_DTI` by bare name. Inside the scope those names resolve to the Script Includes, so there
 is one copy of the logic and it cannot drift.
 
-This is the arrangement that avoids the problem in Option B, but it is not what dev382837 runs,
-so prove it on a test instance before relying on it.
+This is what dev382837 now runs, and it is verified end to end. The listener script is
+`servicenow/USBEM_genericJsonV2.listener.js`; it is ~4 KB instead of the 171 KB inlined build.
 
-### Option B — inlined build (what dev382837 runs) [verified]
+### Option B — inlined build (legacy, not recommended)
 
 Create `sn_em_connector_listener` in the **global** scope with the script from
 `src/USBEM_genericJsonV2_Full.js`, a single file that embeds the listener plus all four classes.
@@ -86,29 +86,12 @@ older than the Script Includes, so REST callers still get pre-fix behaviour for 
 incidents and for assignment group precedence. If you take this option, add "regenerate the
 bundle" to the release checklist for every change under `src/`.
 
-## 4. Async alert linker [verified]
+## 4. No async linker [verified]
 
-The fast path returns before Event Management has built the alert, so the link happens
-afterwards. Two records:
-
-**Script Action** — scope `x_usbna_usb_event`, order 100, active, event name
-`x_usbna_usb_event.link_alert_later`:
-
-```javascript
-var core = new x_usbna_usb_event.USBEM_Core();
-var dti = new x_usbna_usb_event.USBEM_DTI(core);
-var outcome = dti.relinkAlertToIncidentAsync(current, event.parm1, event.parm2);
-gs.info('USBEM async alert linker outcome: ' + core.safeJSONStringify(outcome));
-```
-
-Paste it with **real newlines**. A copy stored with literal `\n` sequences does not compile, and
-the failure is silent: no error surfaces and the linker simply never runs. dev382837 was in that
-state from April to September 2026.
-
-**Event Registry** — register `x_usbna_usb_event.link_alert_later`. Check the name for stray
-characters; dev382837's had a trailing apostrophe. dev382837 registers it against `em_alert`,
-though the event is fired with an incident record, so `incident` is the more accurate table.
-Either works, because the Script Action receives whatever record was passed to `gs.eventQueue`.
+Earlier builds queued a `x_usbna_usb_event.link_alert_later` event and handled it in a Script
+Action, with a retry loop. That is retired: nothing queues events, and there is no Script Action.
+The business rule in section 5 does the linking. If you are migrating an older install, deactivate
+that Script Action and remove the event registration.
 
 ## 5. Reconcile business rule [verified]
 
@@ -117,14 +100,25 @@ Either works, because the Script Action receives whatever record was passed to `
 | Field | Value |
 |---|---|
 | Table | `em_alert` |
-| When | `async_always` |
+| When | `after` — **not async** |
+| Insert / Update | true / true |
 | Order | 150 |
-| Condition | none |
+| Condition | `!current.message_key.nil() && current.incident.nil() && current.state != 'Closed'` |
 | Active | true |
 
-It attaches or corrects the alert link as soon as Event Management creates or updates an alert,
-and in practice usually beats the Script Action to it. Both write through the same conditional
-claim, so whichever runs second reports `already_linked` instead of overwriting.
+It attaches the alert link as soon as Event Management creates or updates an alert, and in
+practice usually beats the Script Action to it. Both write through the same conditional claim,
+so whichever runs second reports `already_linked` instead of overwriting.
+
+**Do not make this async.** Event Management best practices state: "Do not write async business
+rules for alert tables", that a rule here must not take "more than a few milliseconds", and that
+an inefficient one "can cause incident creation for an alert to fail and the alert impact
+calculation to fail". dev382837 ran it as `async_always` with no condition until 2026-09-25,
+which is exactly the pattern that guidance prohibits.
+
+The condition does the heavy lifting: the rule is skipped entirely for alerts that already have
+an incident, have no message key, or are Closed. When it does run and no open USBEM DTI incident
+exists for the key, the script costs one query and writes nothing.
 
 ## 6. Properties [verified]
 

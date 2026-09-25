@@ -14,9 +14,9 @@ In this order. Each is byte-identical to the file listed.
 |---|---|---|---|---|
 | 1 | `sys_script_include` | `USBEM_DTI` | `5643c32bc38c4f100bc1b91ed40131e7` | `src/USBEM_DTI.js` |
 | 2 | `sys_script_include` | `USBEM_Lookups` | `8063cba7c38c4f100bc1b91ed401310a` | `src/USBEM_Lookups.js` |
-| 3 | `sysevent_script_action` | `link_alert_later` | `17ac6fabc3c48f100bc1b91ed40131ac` | `servicenow/link_alert_later.script.js` (mirror repo) |
-| 4 | `sysevent_register` | `x_usbna_usb_event.link_alert_later` | `ae47a323c3848f100bc1b91ed4013108` | n/a — event registration only |
+| 3 | `sn_em_connector_listener` | `USBEM genericJsonV2` | `ec08e3e7c3848f100bc1b91ed40131ef` | `servicenow/USBEM_genericJsonV2.listener.js` |
 | 5 | `sys_properties` | `x_usbna_usb_event.dti_terminal_incident_states` | `7052b5d7939f0794c8ebf85bdd03d69f` | value `6,7,8` |
+| 6 | `sys_script` (business rule) | `USBEM Fast DTI Alert Reconcile` | `f5cb5023c39007900bc1b91ed4013156` | `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js` |
 
 Notes per record:
 
@@ -35,6 +35,11 @@ Notes per record:
 5. **Property** — create it if absent; `6,7,8` is also the built-in default, so a target
    without the property behaves identically. Setting it to `0` is the kill switch that
    restores the old reuse behaviour without a code rollback.
+6. **Business rule** — global scope, table `em_alert`, **when `after`** (not async), insert and
+   update, order 150, condition
+   `!current.message_key.nil() && current.incident.nil() && current.state != 'Closed'`.
+   Event Management best practices prohibit async business rules on alert tables. Check the
+   target's configuration if the rule already exists there.
 
 ## 2. Create these, do not export
 

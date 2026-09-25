@@ -2,6 +2,17 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.09.25.2 - 2026-09-25
+
+- rebuilt the genericJsonV2 listener as a thin script that calls the Script Includes; the deployed build had inlined its own copies and drifted, so REST callers were running months-old logic (171 KB down to 4 KB)
+- `direct_to_incident` now returns an incident in the same response without waiting; `dti_wait_for_incident` keeps the original polling behaviour
+- any incident field can be sent under its real name (`caller_id`, `category`, `subcategory`, `contact_type`, ...), resolved by sys_id or display value, reported back as `incident_fields_applied` / `incident_fields_skipped`
+- work notes work on both records: `work_notes` on the incident, `alert_work_notes` on the alert, and the documented `dti_work_note` works again
+- fixed journal writes: `work_notes` is a journal_input, where `setValue()` is silently dropped, so `dti_work_note` had never actually written anything
+- retired the queued `link_alert_later` event, its Script Action and the retry loop; nothing creates sys_events any more
+- the alert reconcile business rule is synchronous `after` with a condition, per "Do not write async business rules for alert tables"
+- removed `src/USBEM_genericJsonV2_Full.js`, the inlined build that caused the drift
+
 ## 2026.09.25.1 - 2026-09-25
 
 - stopped DTI reusing an incident once it is Resolved, Closed or Canceled: the next event for the key opens a new incident, later events reuse that one, and the alert is moved across

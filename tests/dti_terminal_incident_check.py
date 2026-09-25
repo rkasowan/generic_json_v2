@@ -233,35 +233,7 @@ while (j.next()) { out.push(String(j.getValue('value')).replace(/\\s+/g, ' ').su
 gs.print('@@JSON@@' + JSON.stringify(out));
 """
 
-QUEUE_RETRY_PROBE_JS = """
-var inc = new GlideRecord('incident');
-inc.initialize();
-inc.setValue('short_description', '__PREFIX__ retry-bound probe');
-inc.setValue('correlation_id', '__KEY__');
-inc.setValue('correlation_display', 'USBEM DTI');
-var id = String(inc.insert());
-var g = new GlideRecord('incident'); g.get(id);
-var payload = JSON.stringify({ event_sys_id: '', incident_sys_id: id, message_key: '__KEY__',
-    source: '__PREFIX__', event_class: '__PREFIX__', retry_count: 0 }, null, 2);
-gs.eventQueue('x_usbna_usb_event.link_alert_later', g, '', payload);
-gs.print('@@JSON@@' + JSON.stringify({ incident: id }));
-"""
 
-RETRY_STATE_JS = """
-var out = { events: [], outcomes: [] };
-var e = new GlideRecord('sysevent');
-e.addQuery('name', 'x_usbna_usb_event.link_alert_later');
-e.addQuery('instance', '__INC__'); e.orderBy('sys_created_on'); e.query();
-while (e.next()) { out.events.push([String(e.getValue('sys_created_on')), String(e.getValue('process_on'))]); }
-var s = new GlideRecord('syslog');
-s.addQuery('sys_created_on', '>=', '__SINCE__');
-s.addQuery('message', 'STARTSWITH', 'USBEM async alert linker');
-s.orderBy('sys_created_on'); s.query();
-while (s.next()) { out.outcomes.push(String(s.getValue('message')).replace(/\\s+/g, ' ')); }
-gs.print('@@JSON@@' + JSON.stringify(out));
-"""
-
-NOW_JS = "gs.print('@@JSON@@' + JSON.stringify({ now: String(new GlideDateTime().getValue()) }));"
 
 PERF_JS = """
 var PREFIX = '__PREFIX__', KEY = '__KEY__';
@@ -660,32 +632,6 @@ class Checker:
                     len(new_ids) == 1 and len(open_incidents) == 1 and alert_now.get("incident") in new_ids,
                     key=key[:60] + "...")
 
-    def case_11(self) -> None:
-        """The async linker must give up after the configured retries instead of looping."""
-        key = f"{self.prefix}-{self.run_id}-retrybound"
-        since = (self.sn.script(NOW_JS) or {}).get("now", "")
-        started = self.run_js(QUEUE_RETRY_PROBE_JS, key=key, prefix=self.prefix)
-        incident = (started or {}).get("incident", "")
-        rows = self.sn.table("sys_properties", "name=x_usbna_usb_event.fast_dti_link_max_retries", "value", limit=1)
-        try:
-            retries = int((rows[0]["value"] if rows else "") or 6)
-        except (ValueError, KeyError):
-            retries = 6
-        deadline = time.time() + 40 + retries * 15
-        state: dict = {}
-        while time.time() < deadline:
-            state = self.run_js(RETRY_STATE_JS, inc=incident, since=since) or {}
-            if any("alert_not_found" in line for line in state.get("outcomes", [])):
-                break
-            time.sleep(10)
-        events = state.get("events", [])
-        delayed = sum(1 for created, process_on in events if process_on > created)
-        finished = any("alert_not_found" in line for line in state.get("outcomes", []))
-        self.record("11 retry bound", "async", f"stops after {retries} retries, each delayed",
-                    f"{len(events)} queued event(s), {delayed} delayed; "
-                    f"{'ended with alert_not_found' if finished else 'DID NOT STOP'}",
-                    finished and len(events) <= retries + 1 and delayed >= 1, key=key)
-
     def case_12(self) -> None:
         """Assignment group comes from the CI support tiers, and there is no default group."""
         ci = self.sn.table('cmdb_ci', 'support_groupISEMPTY^ORDERBYname', 'sys_id,name', limit=1)
@@ -770,9 +716,9 @@ class Checker:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", default="both", choices=["fast", "wait", "both"])
-    parser.add_argument("--cases", default="1,2,3,6,7,8,9,10,11,12",
+    parser.add_argument("--cases", default="1,2,3,6,7,8,9,10,12",
                         help="comma-separated: 1 new key, 2 open, 3 terminal (with 4 and 5), 6 closed alert, "
-                             "7 concurrency, 8 non-DTI, 9 timing, 10 long keys, 11 retry bound, "
+                             "7 concurrency, 8 non-DTI, 9 timing, 10 long keys, "
                              "12 CI support tiers and no default group")
     parser.add_argument("--listener", action="store_true",
                         help="also push through the real connector endpoint (fails until the listener is rebuilt)")
@@ -800,9 +746,6 @@ def main() -> int:
             if "8" in cases:  checker.case_8(mode)
             if "9" in cases:  checker.case_9(mode)
             if "10" in cases: checker.case_10(mode)
-        if "11" in cases:
-            print("== async ==")
-            checker.case_11()
         if "12" in cases:
             print("== assignment group ==")
             checker.case_12()
