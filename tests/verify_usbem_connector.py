@@ -221,7 +221,13 @@ gs.print('%s' + JSON.stringify(out));
     def _dti_cycle(self, group: str, wait: bool) -> None:
         extra = {"direct_to_incident": "true"}
         if wait:
+            # The wait path holds the request open until Event Management produces the alert, and
+            # gives up after usbem_wait_seconds (15 by default). A busy instance can take longer
+            # than that, which shows up as dti_incident_status=alert_not_found and is the
+            # instance being slow, not the connector being wrong. Ask for a generous window so
+            # this group tests the code path.
             extra["dti_wait_for_incident"] = "true"
+            extra["usbem_wait_seconds"] = "45"
 
         first = self.push(f"{group}-new", **extra)
         number = first.get("incident_number", "")

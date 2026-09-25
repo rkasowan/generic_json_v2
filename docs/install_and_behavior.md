@@ -260,3 +260,22 @@ Check:
   running older logic than the repo says
 - `syslog` for `USBEM fast DTI alert reconcile [v<version>] outcome`, which the rule logs whenever
   it links or relinks an alert
+
+### `dti_incident_status = alert_not_found`
+
+Only the wait path can return this: it held the request open for `usbem_wait_seconds` (15 by
+default) and Event Management had not produced the alert yet, so there was nothing to create the
+incident against. It means the instance is slow, not that the connector is broken — dev382837 has
+needed more than 15 seconds while degraded. Raise `usbem_wait_seconds` on the payload, or send
+`direct_to_incident` without `dti_wait_for_incident`, which returns the incident immediately and
+lets the reconcile rule attach the alert when it appears.
+
+### The alert is still on the old incident
+
+The fast path claims the alert during the request whenever the alert already exists — which is
+every event after the first for a key, including the one that opens a new incident because the
+old one was Resolved. `alert_link_status` on the response says what happened: `linked`,
+`relinked`, or `deferred_to_reconcile_rule` when something else owned the link. A deferral is
+resolved by the business rule the next time Event Management writes to that alert.
+
+An alert that is Closed is deliberately left on the incident of the cycle it closed with.

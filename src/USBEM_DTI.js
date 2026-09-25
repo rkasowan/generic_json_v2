@@ -1402,6 +1402,8 @@ USBEM_DTI.prototype = {
     getOrCreateFastIncident: function (ctx) {
         var alertGr;
         var existingIncident;
+        var linkedIncident;
+        var terminalIncidentSysId = '';
         var tableName;
         var mapOutcome;
         var waitedIncident;
@@ -1419,14 +1421,19 @@ USBEM_DTI.prototype = {
                 this.upsertMapWithIncident(ctx.mapped.message_key, existingIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
                 return { incident: existingIncident, status: 'existing_from_alert' };
             }
-            // The previous alert for this key is still pointing at a finished incident.
-            // Fall through and open a new one; the async linker moves the alert across.
-            skippedTerminal = !!this.getIncidentFromAlert(alertGr);
+            // The alert for this key is still pointing at a finished incident. Remember which
+            // one, so the claim below can replace that exact link and nothing else.
+            linkedIncident = this.getIncidentFromAlert(alertGr);
+            skippedTerminal = !!linkedIncident;
+            if (linkedIncident && this.isUsbemDtiIncident(linkedIncident) && !this.isClosedAlert(alertGr)) {
+                terminalIncidentSysId = linkedIncident.getUniqueValue();
+            }
         }
 
         existingIncident = this.getExistingIncidentByCorrelationId(ctx.mapped.message_key, ctx.debug);
         if (existingIncident) {
             this.upsertMapWithIncident(ctx.mapped.message_key, existingIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
+            this.claimAlertForFastIncident(ctx, alertGr, existingIncident.getUniqueValue(), terminalIncidentSysId);
             return {
                 incident: existingIncident,
                 status: skippedTerminal ? 'existing_fast_after_terminal' : 'existing_from_correlation_id'
@@ -1450,16 +1457,53 @@ USBEM_DTI.prototype = {
             }
         }
 
-        createdIncident = this.createIncidentRecord(ctx);
+        createdIncident = this.createIncidentRecord(ctx, alertGr);
         if (!createdIncident) {
             return { incident: null, status: 'create_failed' };
         }
 
         this.upsertMapWithIncident(ctx.mapped.message_key, createdIncident.getUniqueValue(), ctx.result.event_sys_id, ctx.debug);
+        this.claimAlertForFastIncident(ctx, alertGr, createdIncident.getUniqueValue(), terminalIncidentSysId);
         return {
             incident: createdIncident,
             status: skippedTerminal ? 'created_fast_after_terminal' : 'created_fast'
         };
+    },
+
+    /**
+     * Attach an alert that already exists to the incident this request is returning.
+     *
+     * The fast path does not wait for Event Management to make the alert, so the first event for
+     * a key is always linked later by the reconcile rule. But every later event - including the
+     * one that opens a new incident because the old one was Resolved - finds the alert already
+     * there, and then waiting for the rule is a gamble on Event Management touching the alert
+     * again. This closes that window with one conditional write and no waiting.
+     *
+     * The same rules as everywhere else: a Closed alert keeps the incident it closed with, and
+     * the claim only lands if the alert is still unlinked or still holds the exact finished
+     * incident that was inspected.
+     */
+    claimAlertForFastIncident: function (ctx, alertGr, incidentSysId, replaceableIncidentSysId) {
+        var claim;
+        if (!alertGr || !this.core.looksLikeSysId(incidentSysId) || this.isClosedAlert(alertGr)) {
+            return false;
+        }
+        if (alertGr.isValidField('incident') &&
+            this.core.trimToString(alertGr.getValue('incident') || '') === String(incidentSysId)) {
+            ctx.result.alert_link_status = 'already_linked';
+            return true;
+        }
+        claim = this.claimAlertForIncident(alertGr.getUniqueValue(), incidentSysId, replaceableIncidentSysId);
+        if (!claim.claimed) {
+            // Someone else owns the link. The reconcile rule re-evaluates on the next alert write.
+            ctx.result.alert_link_status = 'deferred_to_reconcile_rule';
+            return false;
+        }
+        ctx.result.alert_link_status = claim.replaced ? 'relinked' : 'linked';
+        this.core.tracePush(ctx.debug, 'alert ' + alertGr.getUniqueValue() + ' claimed for incident ' +
+            incidentSysId + ' during the request');
+        this.linkGeneratingAlert(incidentSysId, alertGr.getUniqueValue());
+        return true;
     },
 
     

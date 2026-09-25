@@ -143,17 +143,28 @@ class ServiceNow:
     # ------------------------------------------------------------------ plumbing
     def _request(self, method: str, path: str, **kwargs) -> Any:
         url = path if path.startswith("http") else self.instance + path
-        try:
-            response = self.api.request(method, url, timeout=self.timeout, **kwargs)
-        except requests.exceptions.SSLError as exc:
-            raise ServiceNowError(
-                f"TLS verification failed for {url}: {exc}\n"
-                "  pip install -U certifi        (usual fix on macOS)\n"
-                "  SN_CA_BUNDLE=/path/root.pem   to trust a corporate root\n"
-                "  SN_VERIFY_SSL=false           to skip verification (last resort)"
-            ) from None
-        except requests.exceptions.RequestException as exc:
-            raise ServiceNowError(f"{method} {url} failed: {exc}") from None
+        last: Exception | None = None
+        # A long run opens a lot of short-lived connections; a laptop can run out of ephemeral
+        # ports ("Can't assign requested address") or drop one mid-flight. Retry those rather
+        # than report them as an instance failure. A TLS or HTTP error is not retried.
+        for attempt in range(3):
+            try:
+                response = self.api.request(method, url, timeout=self.timeout, **kwargs)
+                break
+            except requests.exceptions.SSLError as exc:
+                raise ServiceNowError(
+                    f"TLS verification failed for {url}: {exc}\n"
+                    "  pip install -U certifi        (usual fix on macOS)\n"
+                    "  SN_CA_BUNDLE=/path/root.pem   to trust a corporate root\n"
+                    "  SN_VERIFY_SSL=false           to skip verification (last resort)"
+                ) from None
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                last = exc
+                time.sleep(2 * (attempt + 1))
+            except requests.exceptions.RequestException as exc:
+                raise ServiceNowError(f"{method} {url} failed: {exc}") from None
+        else:
+            raise ServiceNowError(f"{method} {url} failed after 3 attempts: {last}") from None
         if response.status_code >= 400:
             raise ServiceNowError(f"{method} {path} -> HTTP {response.status_code}: {response.text[:400]}")
         if not response.text.strip():

@@ -153,8 +153,10 @@ It also supports these helper inputs:
 - the event is inserted normally
 - the connector reuses the key's open incident, or opens a new one
 - the incident comes back in the response; nothing waits for Event Management
-- the alert is attached afterwards by the `USBEM Fast DTI Alert Reconcile` business rule, the
-  moment Event Management creates it
+- if the alert already exists — every event after the first for a key — it is attached during the
+  request with one conditional write, and `alert_link_status` says `linked` or `relinked`
+- otherwise the alert is attached by the `USBEM Fast DTI Alert Reconcile` business rule the moment
+  Event Management creates it
 
 There are no queued events, no Script Actions and no retry loop. The business rule is a
 synchronous `after` rule with a condition, because Event Management best practices say plainly:
@@ -452,6 +454,8 @@ Typical response fields:
 - `dti_mode` — `fast_async` or `wait_for_incident`
 - `dti_incident_status` — how the incident was chosen; see the terminal-incident table above
 - `dti_version` — the `USBEM_DTI` version that handled the incident
+- `alert_link_status` — `linked`, `relinked` or `deferred_to_reconcile_rule` when the alert
+  already existed and the fast path attached it during the request
 - `incident_fields_applied` / `incident_fields_skipped` — which payload fields were written
 - `incident_netcool_ticket`, `incident_caller_default`, `incident_defaults_skipped` — what the
   connector defaults did

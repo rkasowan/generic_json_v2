@@ -26,6 +26,9 @@ All notable project updates should be recorded here when work is completed and p
 - replaced `tests/dti_terminal_incident_check.py` with `tests/verify_usbem_connector.py`: seven
   selectable groups covering version/drift, the original connector contract, both DTI paths,
   field mapping, work notes on both records, and timing
+- the fast path now claims an alert that already exists during the request instead of waiting for
+  the reconcile rule, so the relink after a Resolved/Closed/Canceled incident no longer depends on
+  Event Management touching the alert again; `alert_link_status` reports what happened
 - tightened the reconcile rule's condition to the alerts this connector owns, and removed
   `src/USBEM_genericJsonV2.js`, the second copy of the listener script
 
