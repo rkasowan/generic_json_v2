@@ -2,6 +2,33 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.09.25.3 - 2026-09-25
+
+- every script carries a version and every response reports them: `versions` on the endpoint
+  envelope covers the listener and all four Script Includes, `dti_version` rides on the DTI
+  result, and the business rule logs its version with each outcome
+- matched the retired "EM - Generic Endpoint Create Incident" subflow's field mapping on every
+  incident this connector creates: `u_netcool_ticket = true`, category `Software`, subcategory
+  `Monitoring Alert`, caller `Event Management`, `u_generating_alert` pointed at the alert, the
+  alert's group as a last-resort assignment group, and the work note
+  "Direct To Incident Via Event Management Generic JSON Endpoint / Incident Created From <alert>"
+- reproduced the subflow's duplicate branch: an event folded into an existing incident adds a
+  duplicate work note, switchable with `x_usbna_usb_event.dti_duplicate_work_note`
+- payload fields still win over all of it, and `work_notes` / `comments` are now written as
+  journal entries instead of being dropped by the generic passthrough
+- made the defaults fence-safe: a scope denied read on `sys_user` or write on `incident` loses
+  that one field and reports it in `incident_defaults_skipped` / `incident_work_note`, instead of
+  failing the event with `ScopeAccessNotGrantedException`
+- added `scripts/deploy_usbem.py` (push the repo at an instance, read back live versions),
+  `scripts/usbem_client.py` and `requirements.txt`; the Python tooling now uses `requests` and
+  certifi, which fixes the macOS venv `CERTIFICATE_VERIFY_FAILED` failures, and honours
+  `SN_CA_BUNDLE` / `SN_VERIFY_SSL`
+- replaced `tests/dti_terminal_incident_check.py` with `tests/verify_usbem_connector.py`: seven
+  selectable groups covering version/drift, the original connector contract, both DTI paths,
+  field mapping, work notes on both records, and timing
+- tightened the reconcile rule's condition to the alerts this connector owns, and removed
+  `src/USBEM_genericJsonV2.js`, the second copy of the listener script
+
 ## 2026.09.25.2 - 2026-09-25
 
 - rebuilt the genericJsonV2 listener as a thin script that calls the Script Includes; the deployed build had inlined its own copies and drifted, so REST callers were running months-old logic (171 KB down to 4 KB)

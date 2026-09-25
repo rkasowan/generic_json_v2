@@ -1,96 +1,107 @@
-# DTI terminal-incident fix + CI support tier assignment — transfer package
+# Manual transfer package — genericJsonV2 connector, release 2026.09.25.3
 
-Everything changed on dev382837 between 2026-09-18 and 2026-09-25, for manual export.
-Update sets were created along the way but are **not** the source of truth here: the CI field
-changes never captured (see section 3), so work from this list.
+Everything that has to move out of dev382837 for this connector, as a package list for a manual
+export. Update sets are not the source of truth here; git is. Each record below is byte-identical
+to the file named beside it, and `scripts/deploy_usbem.py` writes exactly these six records.
 
-Source of truth for the scripts is git: `rkasowan/generic_json_v2` at `3e2738d` or later.
+Source of truth: `rkasowan/generic_json_v2`, tag/commit for release `2026.09.25.3`.
 
-## 1. Export these
-
-In this order. Each is byte-identical to the file listed.
+## 1. Records to move
 
 | # | Table | Record | sys_id (dev382837) | Source file |
 |---|---|---|---|---|
-| 1 | `sys_script_include` | `USBEM_DTI` | `5643c32bc38c4f100bc1b91ed40131e7` | `src/USBEM_DTI.js` |
+| 1 | `sys_script_include` | `USBEM_Core` | `e2734f2bc38c4f100bc1b91ed401319c` | `src/USBEM_Core.js` |
 | 2 | `sys_script_include` | `USBEM_Lookups` | `8063cba7c38c4f100bc1b91ed401310a` | `src/USBEM_Lookups.js` |
-| 3 | `sn_em_connector_listener` | `USBEM genericJsonV2` | `ec08e3e7c3848f100bc1b91ed40131ef` | `servicenow/USBEM_genericJsonV2.listener.js` |
-| 5 | `sys_properties` | `x_usbna_usb_event.dti_terminal_incident_states` | `7052b5d7939f0794c8ebf85bdd03d69f` | value `6,7,8` |
-| 6 | `sys_script` (business rule) | `USBEM Fast DTI Alert Reconcile` | `f5cb5023c39007900bc1b91ed4013156` | `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js` |
+| 3 | `sys_script_include` | `USBEM_Debug` | `ae23cba7c38c4f100bc1b91ed4013117` | `src/USBEM_Debug.js` |
+| 4 | `sys_script_include` | `USBEM_DTI` | `5643c32bc38c4f100bc1b91ed40131e7` | `src/USBEM_DTI.js` |
+| 5 | `sn_em_connector_listener` | `USBEM genericJsonV2` | `ec08e3e7c3848f100bc1b91ed40131ef` | `servicenow/USBEM_genericJsonV2.listener.js` |
+| 6 | `sys_script` | `USBEM Fast DTI Alert Reconcile` | `26dcd72193a78710c8ebf85bdd03d613` | `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js` |
 
-Notes per record:
+All four Script Includes are in scope `x_usbna_usb_event`, **Accessible from: All application
+scopes**, not client callable. The listener and the business rule are global.
 
-1. **USBEM_DTI** — stops reusing Resolved/Closed/Canceled incidents; bounds the async link
-   retries. Scope `x_usbna_usb_event`.
-2. **USBEM_Lookups** — assignment group from the event's `assignment_group`, then
-   `cmdb_ci.support_group`, then `u_level_2_support_assignee_group`; the default/placeholder
-   group fallback is removed.
-   Depends on section 2 for the CI fields (it skips fields that do not exist, so it is safe
-   to move this first).
-3. **link_alert_later** — the source on dev382837 was stored with literal `\n` sequences and
-   never compiled, so the async linker had never run. Check the target before overwriting: if
-   it has the same defect, this fixes it; if it was already correct there, compare first.
-4. **sysevent_register** — the event name carried a trailing apostrophe
-   (`…link_alert_later'`). Only needs moving if the target has the same typo.
-5. **Property** — create it if absent; `6,7,8` is also the built-in default, so a target
-   without the property behaves identically. Setting it to `0` is the kill switch that
-   restores the old reuse behaviour without a code rollback.
-6. **Business rule** — global scope, table `em_alert`, **when `after`** (not async), insert and
-   update, order 150, condition
-   `!current.message_key.nil() && current.incident.nil() && current.state != 'Closed'`.
-   Event Management best practices prohibit async business rules on alert tables. Check the
-   target's configuration if the rule already exists there.
+Every one of these scripts carries the release version, and the endpoint returns all of them in
+its `versions` response block. After the transfer, push one event at the target and check that
+block before believing anything else.
 
-## 2. Create these, do not export
+### The business rule's configuration is part of the package
 
-`cmdb_ci.u_level_2_support_assignee_group` and `cmdb_ci.u_level_3_support_assignee_group`,
-both `reference` → `sys_user_group`.
+| Field | Value |
+|---|---|
+| Table | `em_alert` |
+| When | `after` — **not async** |
+| Insert / Update | true / true |
+| Order | 150 |
+| Active | true |
 
-Do not hand-export them. Adding the column to `cmdb_ci` propagates a dictionary entry **and**
-a label record to every CI class: on dev382837 that is **1,334 `sys_dictionary` rows and 1,334
-`sys_documentation` rows per field** — 5,336 records for the pair. Let the platform generate
-them in the target instead:
+```javascript
+(current.additional_info.indexOf('direct_to_incident') > -1 ||
+ current.additional_info.indexOf('work_notes') > -1) &&
+(current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)
+```
 
-    generic_json_v2/servicenow/install_ci_support_tier_fields.background.js
+Event Management best practices prohibit async business rules on alert tables. If the rule already
+exists in the target, check its `when` before overwriting the script.
 
-Idempotent: reports "already present" and corrects labels if the fields exist. **Run it from
-Scripts – Background in the UI, not over HTTP** — on dev382837 an HTTP client timeout at 300 s
-cut the transaction short, which is why nothing captured. Expect it to run for minutes and to
-slow the instance while the CI hierarchy is altered.
+## 2. Create in the target, do not export
 
-## 3. Do not move
+`cmdb_ci.u_level_2_support_assignee_group` and `cmdb_ci.u_level_3_support_assignee_group`, both
+`reference` → `sys_user_group`.
+
+Do not hand-export them. Adding a column to `cmdb_ci` propagates a dictionary entry **and** a
+label record to every CI class: on dev382837 that is **1,334 `sys_dictionary` rows and 1,334
+`sys_documentation` rows per field** — 5,336 records for the pair. Let the platform generate them:
+
+    servicenow/install_ci_support_tier_fields.background.js
+
+Idempotent. **Run it from Scripts – Background in the UI, not over HTTP** — a client timeout cuts
+the transaction short. Expect minutes, and a slow instance while it runs.
+
+## 3. Properties — optional, code has the same defaults
+
+| Property | Value |
+|---|---|
+| `x_usbna_usb_event.dti_terminal_incident_states` | `6,7,8` |
+| `x_usbna_usb_event.dti_duplicate_work_note` | `true` |
+
+`x_usbna_usb_event.default_assignment_group_sys_id` is no longer read. If the target sets it, that
+value stops taking effect — intended: an incident with no resolvable group is left unassigned.
+
+## 4. Do not move
 
 | Table | Record(s) | Why |
 |---|---|---|
-| `em_match_rule` | `cghfvghjk`, `Junk Rule`, `Do Something Dumb`, `This will break everything` | PDI-only junk rules, deactivated on 2026-09-18. They had empty filters and `ignore_event=true`, so they suppressed **all** alert creation. They should not exist anywhere else; exporting would create them. |
-| `sys_dictionary` / `sys_documentation` | the 5,336 per-class rows for the two fields | Generated by section 2. |
-| `sys_ui_section` | `90fe4db4c0a801640043b5bbfcdac216` | Incidental CI form layout change from adding the column. Move only if you want the fields on the form. |
+| `em_match_rule` | `cghfvghjk`, `Junk Rule`, `Do Something Dumb`, `This will break everything` | PDI-only junk rules with empty filters and `ignore_event=true`, deactivated 2026-09-18. They suppressed **all** alert creation. Exporting them would recreate them |
+| `sysevent_script_action` | `link_alert_later` | the retired async linker. Deactivated, not part of this design |
+| `sysevent_register` | `x_usbna_usb_event.link_alert_later` | same |
+| `sys_dictionary` / `sys_documentation` | the 5,336 per-class rows for the two CI fields | generated by section 2 |
+| `sys_ui_section` | `90fe4db4c0a801640043b5bbfcdac216` | incidental CI form layout change. Move only if you want the fields on the form |
 
-## 4. Environment-specific — re-check in the target
+## 5. Environment-specific — re-check in the target
 
-- **Group references.** Nothing in the code hardcodes a group, but the CI fields point at
-  `sys_user_group` records whose sys_ids differ per environment. CI data is not part of this
-  package.
-- **Properties.** `x_usbna_usb_event.default_assignment_group_sys_id` is no longer read by
-  `USBEM_Lookups`. If a target sets it, that value stops taking effect — that is the intended
-  change. Note dev382837 has a similarly named `default_cmdb_assignment_group_sys_id`, which
-  the code never read and whose value does not resolve to a group.
-- **Scope privileges.** `x_usbna_usb_event` runs with `runtime_access_tracking = enforcing` and
-  has **no** privilege for `cmdb_rel_ci`. Any event that resolves to a real CI throws
-  `ScopeAccessNotGrantedException` before the support-group logic runs, so the tier chain
-  cannot fire. Grant read on `cmdb_rel_ci` in any environment where CI matching is expected to
-  work. Pre-existing; not introduced by this work.
-- **The inbound listener carries its own copy.** `sn_em_connector_listener` "USBEM genericJsonV2"
-  (`ec08e3e7c3848f100bc1b91ed40131ef`, global) inlines its own older `USBEM_DTI`, `USBEM_Core`
-  and `USBEM_Lookups`, and is **not** in this package. Until it is regenerated from the modular
-  sources, REST callers get none of these changes — verified live on 2026-09-25, where a push
-  after resolving an incident still returned the resolved one.
+- **Incident fields.** `u_netcool_ticket` must exist on `incident` (boolean) or the NetCool flag is
+  silently skipped. `u_generating_alert` (reference → `em_alert`) exists in the customer dictionary
+  but not on dev382837, so that mapping is untested there.
+- **The `Event Management` user.** The default caller is resolved by display value. A target
+  without that user gets no default caller and reports `incident_caller_default: unresolved`.
+- **Category and subcategory.** The defaults are the literals `Software` and `Monitoring Alert`.
+  Where the choice exists they resolve to its value; where it does not, the literal is written.
+  dev382837 has no `Monitoring Alert` choice, so it stores the literal.
+- **Cross-scope privileges.** `x_usbna_usb_event` runs with `runtime_access_tracking = enforcing`.
+  dev382837 has no `cmdb_rel_ci` read (CI-derived assignment groups cannot work) and no `incident`
+  write (the duplicate work note and post-creation `u_generating_alert` are skipped and reported).
+  Grant both where those behaviours are expected.
+- **Group references.** Nothing hardcodes a group, but the CI fields point at `sys_user_group`
+  records whose sys_ids differ per environment. CI data is not part of this package.
 
-## 5. Verify after transfer
+## 6. Verify after transfer
 
-    python3 tests/dti_terminal_incident_check.py --listener
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python3 tests/verify_usbem_connector.py
+```
 
-Standard library only; reads credentials from the environment or `.env`; tags everything it
-creates and deletes it afterwards. Needs an admin account, because it drives the Script Include
-through a background script. 37 checks passed on dev382837 on 2026-09-25; the `--listener` check
-is expected to fail until the listener is rebuilt.
+Self-cleaning, exit code 0 when everything passed. `--only deploy` alone confirms that every
+record in the target matches this repo and that the endpoint reports release `2026.09.25.3` for
+all five components.

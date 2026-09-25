@@ -1,0 +1,8 @@
+# Everything the Python tooling in this repo needs.
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# requests is used instead of urllib because it ships with a working CA bundle on macOS,
+# which is what causes "CERTIFICATE_VERIFY_FAILED" in a plain venv there.
+requests>=2.32.3
+certifi>=2024.7.4

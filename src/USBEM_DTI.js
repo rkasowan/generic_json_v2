@@ -21,6 +21,21 @@ USBEM_DTI.prototype = {
         this.DEFAULT_DTI_MAP_PENDING_WAIT_MS = 1500;
         this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES = '6,7,8';
         this.PENDING_MAP_POLL_MS = 100;
+
+        this.VERSION = '2026.09.25.3';
+        this.COMPONENT = 'USBEM_DTI';
+
+        // Field mapping inherited from the retired "EM - Generic Endpoint Create Incident"
+        // subflow, which is what this connector replaced. These are defaults only: anything
+        // the sender puts in the payload is applied afterwards and wins.
+        this.PROPERTY_DTI_DUPLICATE_WORK_NOTE = 'x_usbna_usb_event.dti_duplicate_work_note';
+        this.DEFAULT_INCIDENT_CATEGORY = 'Software';
+        this.DEFAULT_INCIDENT_SUBCATEGORY = 'Monitoring Alert';
+        this.DEFAULT_CALLER_NAME = 'Event Management';
+        this.CONNECTOR_WORK_NOTE = 'Direct To Incident Via Event Management Generic JSON Endpoint';
+        this.DUPLICATE_WORK_NOTE = 'Duplicate event received via Event Management Generic JSON Endpoint';
+        this.NETCOOL_TICKET_FIELD = 'u_netcool_ticket';
+        this.GENERATING_ALERT_FIELD = 'u_generating_alert';
     },
 
     queryNow: function (gr, trace) {
@@ -709,7 +724,10 @@ USBEM_DTI.prototype = {
     /**
      * Fields the connector owns. Everything else on the incident is fair game.
      */
-    RESERVED_INCIDENT_FIELDS: ['sys_id', 'number', 'correlation_id', 'correlation_display'],
+    // work_notes and comments are journal fields: setValue() is silently dropped on them,
+    // so they are assembled and written by buildCreationWorkNote/applyReuseIncidentNotes.
+    RESERVED_INCIDENT_FIELDS: ['sys_id', 'number', 'correlation_id', 'correlation_display',
+        'work_notes', 'comments'],
 
     /**
      * Write sender-supplied incident fields straight through, under their real names.
@@ -765,7 +783,238 @@ USBEM_DTI.prototype = {
         }
     },
 
-    createIncidentRecord: function (ctx) {
+    /**
+     * Run one default and keep going if the instance will not allow it.
+     * A scoped app with runtime access tracking enforcing can be denied read on a table this
+     * touches (sys_user is the usual one). That must cost the connector a default field, not the
+     * whole event, so every failure is recorded on the response and swallowed.
+     */
+    applyDefault: function (ctx, label, apply) {
+        try {
+            apply();
+            return true;
+        } catch (eDefault) {
+            this.core.tracePush(ctx.debug, 'incident default skipped (' + label + '): ' + eDefault);
+            ctx.result.incident_defaults_skipped = this.core.hasValue(ctx.result.incident_defaults_skipped) ?
+                (ctx.result.incident_defaults_skipped + ',' + label) : label;
+            return false;
+        }
+    },
+
+    /**
+     * Write a choice-like value that may or may not exist in this instance's choice list.
+     * setDisplayValue resolves "Software" to its stored value where the choice exists; where it
+     * does not, the literal is written, which is what the subflow's Create Record step did.
+     */
+    setChoiceLike: function (incGr, field, value) {
+        if (!incGr.isValidField(field) || !this.core.hasValue(value)) {
+            return false;
+        }
+        try {
+            incGr.getElement(field).setDisplayValue(String(value));
+        } catch (eDisplay) {
+        }
+        if (!this.core.hasValue(incGr.getValue(field))) {
+            incGr.setValue(field, String(value));
+        }
+        return this.core.hasValue(incGr.getValue(field));
+    },
+
+    /**
+     * Point the incident's Generating Alert reference at the alert, on an unsaved record.
+     * The field is customer-specific, so an instance without it is a no-op, not an error.
+     */
+    stampGeneratingAlert: function (incGr, alertSysId) {
+        if (!incGr || !this.core.looksLikeSysId(alertSysId) || !incGr.isValidField(this.GENERATING_ALERT_FIELD)) {
+            return false;
+        }
+        incGr.setValue(this.GENERATING_ALERT_FIELD, String(alertSysId));
+        return true;
+    },
+
+    /**
+     * Same, for an incident that already exists. The fast path creates the incident before Event
+     * Management has made the alert, so the reference can only be written when they are linked.
+     */
+    linkGeneratingAlert: function (incidentSysId, alertSysId) {
+        var gr;
+        if (!this.core.looksLikeSysId(incidentSysId) || !this.core.looksLikeSysId(alertSysId)) {
+            return false;
+        }
+        try {
+            gr = new GlideRecord('incident');
+            if (!gr.isValidField(this.GENERATING_ALERT_FIELD)) {
+                return false;
+            }
+            if (!gr.get(incidentSysId)) {
+                return false;
+            }
+            if (String(gr.getValue(this.GENERATING_ALERT_FIELD) || '') === String(alertSysId)) {
+                return false;
+            }
+            gr.setValue(this.GENERATING_ALERT_FIELD, String(alertSysId));
+            gr.update();
+            return true;
+        } catch (eLink) {
+            // Same as the reuse note: an instance that does not grant this scope write access to
+            // incident keeps its data, it just does not get the back-reference.
+            return false;
+        }
+    },
+
+    /**
+     * Defaults the retired subflow applied to every incident it created. Called before the
+     * sender's own fields, so a payload that carries category, caller_id or anything else
+     * overrides what is set here.
+     */
+    applyConnectorIncidentDefaults: function (incGr, ctx, alertGr) {
+        var self = this;
+
+        // "NetCool Ticket" is checked on every incident this connector creates.
+        this.applyDefault(ctx, 'u_netcool_ticket', function () {
+            if (incGr.isValidField(self.NETCOOL_TICKET_FIELD)) {
+                incGr.setValue(self.NETCOOL_TICKET_FIELD, true);
+                ctx.result.incident_netcool_ticket = 'true';
+            }
+        });
+
+        this.applyDefault(ctx, 'category', function () {
+            self.setChoiceLike(incGr, 'category', self.DEFAULT_INCIDENT_CATEGORY);
+            self.setChoiceLike(incGr, 'subcategory', self.DEFAULT_INCIDENT_SUBCATEGORY);
+        });
+
+        // setDisplayValue resolves the user through the reference field itself. A scoped
+        // GlideRecord query against sys_user would need a cross-scope read privilege that this
+        // application does not have, and would fail the whole event rather than one field.
+        this.applyDefault(ctx, 'caller_id', function () {
+            if (!incGr.isValidField('caller_id') || self.core.hasValue(incGr.getValue('caller_id'))) {
+                return;
+            }
+            incGr.getElement('caller_id').setDisplayValue(self.DEFAULT_CALLER_NAME);
+            ctx.result.incident_caller_default = self.core.hasValue(incGr.getValue('caller_id')) ?
+                'applied' : 'unresolved';
+        });
+
+        if (!alertGr) {
+            return;
+        }
+
+        this.applyDefault(ctx, 'u_generating_alert', function () {
+            self.stampGeneratingAlert(incGr, alertGr.getUniqueValue());
+        });
+
+        // Assignment group of last resort: the alert's own group, as the subflow did when its
+        // group lookup errored. Only fills a gap; it never displaces a resolved group.
+        this.applyDefault(ctx, 'assignment_group', function () {
+            var alertGroup;
+            if (!incGr.isValidField('assignment_group') || self.core.hasValue(incGr.getValue('assignment_group')) ||
+                !alertGr.isValidField('assignment_group')) {
+                return;
+            }
+            alertGroup = self.core.trimToString(alertGr.getValue('assignment_group') || '');
+            if (self.core.looksLikeSysId(alertGroup)) {
+                incGr.setValue('assignment_group', alertGroup);
+                ctx.result.assignment_group_source = 'alert';
+            }
+        });
+    },
+
+    /**
+     * The work note every incident created here opens with, plus whatever the sender asked for.
+     * Journal fields take one write per update, so the parts are joined and written once.
+     * "dti_work_note" is the name the original endpoint documented; "work_notes" is the field's
+     * own name and works the same way.
+     */
+    buildCreationWorkNote: function (ctx, alertGr) {
+        var parts = [this.CONNECTOR_WORK_NOTE];
+        var createdFrom = '';
+        var senderNote;
+
+        if (alertGr && alertGr.isValidField('number')) {
+            createdFrom = this.core.trimToString(alertGr.getValue('number') || '');
+        }
+        if (!this.core.hasValue(createdFrom)) {
+            createdFrom = this.core.trimToString(ctx.mapped.message_key);
+        }
+        if (this.core.hasValue(createdFrom)) {
+            parts.push('Incident Created From ' + createdFrom);
+        }
+
+        senderNote = this.getSenderIncidentNote(ctx);
+        if (this.core.hasValue(senderNote)) {
+            parts.push(String(senderNote));
+        }
+        return parts.join('\n\n');
+    },
+
+    /** The sender's own incident work note, under either the documented or the real field name. */
+    getSenderIncidentNote: function (ctx) {
+        var info = this.core.isObject(ctx.user_additional_info) ? ctx.user_additional_info : {};
+        if (this.core.hasValue(ctx.special.dti_work_note)) {
+            return ctx.special.dti_work_note;
+        }
+        if (this.core.hasValue(info.work_notes)) {
+            return info.work_notes;
+        }
+        if (this.core.hasValue(info.comments)) {
+            return info.comments;
+        }
+        return '';
+    },
+
+    /** True for the outcome statuses that mean "this event reused an incident". */
+    isReuseStatus: function (status) {
+        var text = String(status || '');
+        return text.indexOf('existing') === 0 || text.indexOf('claimed_from_terminal') === 0;
+    },
+
+    /**
+     * Annotate an incident this event was folded into rather than creating a new one, which is
+     * what the subflow's duplicate branch did. One update, and only for incident reuse.
+     * Set x_usbna_usb_event.dti_duplicate_work_note to false to switch the note off.
+     */
+    applyReuseIncidentNotes: function (incidentGr, ctx) {
+        var parts = [];
+        var senderNote;
+        var gr;
+
+        if (!incidentGr || !incidentGr.getUniqueValue) {
+            return false;
+        }
+        if (this.getStringProperty(this.PROPERTY_DTI_DUPLICATE_WORK_NOTE, 'true', ctx.debug) !== 'false') {
+            parts.push(this.DUPLICATE_WORK_NOTE +
+                (this.core.hasValue(ctx.mapped.message_key) ? ' (' + ctx.mapped.message_key + ')' : ''));
+        }
+        senderNote = this.getSenderIncidentNote(ctx);
+        if (this.core.hasValue(senderNote)) {
+            parts.push(String(senderNote));
+        }
+        if (!parts.length) {
+            return false;
+        }
+
+        try {
+            gr = new GlideRecord('incident');
+            if (!gr.get(incidentGr.getUniqueValue())) {
+                return false;
+            }
+            this.setWorkNotesIfPresent(gr, parts.join('\n\n'));
+            gr.update();
+        } catch (eNote) {
+            // Updating an existing incident needs write access to the incident table, which a
+            // scoped application is not always granted (creating one can be allowed while
+            // updating one is not). Losing the note must not lose the event.
+            this.core.tracePush(ctx.debug, 'reuse work note skipped: ' + eNote);
+            ctx.result.incident_work_note = 'skipped';
+            ctx.result.incident_work_note_skipped_reason = String(eNote).indexOf('ScopeAccessNotGranted') > -1 ?
+                'no_write_access_to_incident' : 'error';
+            return false;
+        }
+        ctx.result.incident_work_note = 'reuse';
+        return true;
+    },
+
+    createIncidentRecord: function (ctx, alertGr) {
         var inc;
         var sysId;
         var shortDescription;
@@ -805,11 +1054,15 @@ USBEM_DTI.prototype = {
             inc.setValue('service_offering', ctx.resolved.cmdb_ci_service_offering);
         }
 
+        // Subflow parity defaults (NetCool Ticket, category, subcategory, caller, generating
+        // alert) before the payload, so anything the sender sends overrides them.
+        this.applyConnectorIncidentDefaults(inc, ctx, alertGr);
+
         // Sender-supplied fields last, so an explicitly supplied caller_id, category or any
         // other incident field wins over anything derived above.
         this.applyRequestedIncidentFields(inc, ctx);
 
-        this.setWorkNotesIfPresent(inc, ctx.special.dti_work_note);
+        this.setWorkNotesIfPresent(inc, this.buildCreationWorkNote(ctx, alertGr));
 
         sysId = inc.insert();
         if (!this.core.looksLikeSysId(sysId)) {
@@ -930,7 +1183,7 @@ USBEM_DTI.prototype = {
             };
         }
 
-        createdIncident = this.createIncidentRecord(ctx);
+        createdIncident = this.createIncidentRecord(ctx, refreshedAlert || alertGr);
         if (!createdIncident) {
             return { incident: null, status: 'create_failed' };
         }
@@ -1291,11 +1544,15 @@ USBEM_DTI.prototype = {
         claim = this.claimAlertForIncident(alertGr.getUniqueValue(), preferredIncident.getUniqueValue(),
             existingIncident ? existingIncident.getUniqueValue() : '');
         if (claim.claimed) {
+            // The fast path created the incident before this alert existed, so Generating Alert
+            // can only be filled in now. A no-op on instances without the field.
+            this.linkGeneratingAlert(preferredIncident.getUniqueValue(), alertGr.getUniqueValue());
             outcome = {
                 status: existingIsTerminal ? 'relinked_from_terminal_incident' :
                     (existingIncident ? 'relinked_to_fast_incident' : 'linked'),
                 alert_sys_id: alertGr.getUniqueValue(),
-                incident_sys_id: preferredIncident.getUniqueValue()
+                incident_sys_id: preferredIncident.getUniqueValue(),
+                dti_version: this.VERSION
             };
             if (existingIsTerminal) {
                 outcome.previous_incident_sys_id = existingIncident.getUniqueValue();
@@ -1327,8 +1584,12 @@ USBEM_DTI.prototype = {
         outcome = this.getOrCreateFastIncident(ctx);
         ctx.result.dti_mode = 'fast_async';
         ctx.result.dti_incident_status = outcome.status || '';
+        ctx.result.dti_version = this.VERSION;
         if (outcome.incident) {
             this.core.mergeDeep(ctx.result, this.core.summarizeIncident(outcome.incident));
+            if (this.isReuseStatus(outcome.status)) {
+                this.applyReuseIncidentNotes(outcome.incident, ctx);
+            }
         }
         // Nothing is queued here. The alert does not exist yet, and the em_alert business rule
         // links it the moment Event Management creates it.
@@ -1364,9 +1625,16 @@ USBEM_DTI.prototype = {
             dtiOutcome = this.createOrReuseIncidentForAlert(ctx, alertGr);
             ctx.result.dti_mode = 'wait_for_incident';
             ctx.result.dti_incident_status = dtiOutcome.status || '';
+            ctx.result.dti_version = this.VERSION;
             incidentGr = dtiOutcome.incident;
             if (incidentGr) {
                 this.core.mergeDeep(ctx.result, this.core.summarizeIncident(incidentGr));
+                if (alertGr) {
+                    this.linkGeneratingAlert(incidentGr.getUniqueValue(), alertGr.getUniqueValue());
+                }
+                if (this.isReuseStatus(dtiOutcome.status)) {
+                    this.applyReuseIncidentNotes(incidentGr, ctx);
+                }
             }
         }
 

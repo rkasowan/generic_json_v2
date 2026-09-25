@@ -7,13 +7,27 @@
  * until REST callers were running months-old logic while the Script Includes were current.
  *
  * Response contract is unchanged: status, inserted, sys_ids, results[], version, and for a
- * single record the first result is echoed to the top level.
+ * single record the first result is echoed to the top level. "versions" is additive: it reports
+ * the running version of this listener and of every Script Include behind it, so a stale copy on
+ * an instance is visible in the response instead of needing a code comparison.
  */
 (function process(/*RESTAPIRequest*/ request, body) {
+    var LISTENER_VERSION = '2026.09.25.3';
     var core = new x_usbna_usb_event.USBEM_Core({ request: request });
     var lookups = new x_usbna_usb_event.USBEM_Lookups(core);
     var debugHelper = new x_usbna_usb_event.USBEM_Debug(core);
+    var dtiHelper = new x_usbna_usb_event.USBEM_DTI(core);
     var rawPayloadText = '';
+
+    function componentVersions() {
+        return {
+            listener: LISTENER_VERSION,
+            core: String(core.VERSION || ''),
+            lookups: String(lookups.VERSION || ''),
+            debug: String(debugHelper.VERSION || ''),
+            dti: String(dtiHelper.VERSION || '')
+        };
+    }
 
     try {
         rawPayloadText = (typeof body === 'string') ? body : core.safeJSONStringify(body);
@@ -24,7 +38,6 @@
     function processSingleEvent(rawEvent, envelope) {
         var ctx = core.createRecordContext(rawEvent, envelope);
         var finalAdditionalInfo;
-        var dtiHelper;
 
         lookups.resolveAll(ctx);
 
@@ -32,7 +45,6 @@
         core.insertEventRecord(ctx, finalAdditionalInfo);
 
         if (ctx.flags.direct_to_incident || ctx.flags.wait_requested) {
-            dtiHelper = new x_usbna_usb_event.USBEM_DTI(core);
             dtiHelper.handlePostInsert(ctx);
         }
 
@@ -79,7 +91,8 @@
             inserted: String(results.length),
             sys_ids: [],
             results: results,
-            version: core.VERSION
+            version: core.VERSION,
+            versions: componentVersions()
         };
 
         for (i = 0; i < contexts.length; i++) {
@@ -108,7 +121,8 @@
         errorResponse = {
             status: 'error',
             message: String(er),
-            version: core.VERSION
+            version: core.VERSION,
+            versions: componentVersions()
         };
 
         errorDebugEventSysId = debugHelper.createDebugEvent(rawPayloadText, errorResponse, [], String(er));

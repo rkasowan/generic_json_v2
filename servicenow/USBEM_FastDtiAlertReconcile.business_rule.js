@@ -24,6 +24,10 @@
  * at volume; the lookup queries incident by correlation_id.
  */
 (function executeRule(current, previous /*null when async*/) {
+    // Version stamp, logged with every outcome. The Script Includes report their own versions in
+    // the endpoint response; this rule has no response, so the log line is where its version
+    // shows up. Keep it in step with the release the rest of the project is on.
+    var BR_VERSION = '2026.09.25.3';
     var core;
     var dti;
     var outcome;
@@ -33,9 +37,10 @@
         dti = new x_usbna_usb_event.USBEM_DTI(core);
         outcome = dti.reconcileAlertIncident(current, null);
         if (outcome && (outcome.status === 'linked' || outcome.status === 'relinked_to_fast_incident')) {
-            gs.info('USBEM fast DTI alert reconcile outcome: ' + core.safeJSONStringify(outcome));
+            outcome.business_rule_version = BR_VERSION;
+            gs.info('USBEM fast DTI alert reconcile [v' + BR_VERSION + '] outcome: ' + core.safeJSONStringify(outcome));
         }
     } catch (e) {
-        gs.error('USBEM fast DTI alert reconcile failed: ' + e);
+        gs.error('USBEM fast DTI alert reconcile [v' + BR_VERSION + '] failed: ' + e);
     }
 })(current, previous);

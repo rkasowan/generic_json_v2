@@ -7,10 +7,13 @@ The repo now also includes the live modular `genericJsonV2` PDI layout:
 - `src/USBEM_Lookups.js`
 - `src/USBEM_Debug.js`
 - `src/USBEM_DTI.js`
-- `src/USBEM_genericJsonV2.js`
+- `servicenow/USBEM_genericJsonV2.listener.js`
+- `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js`
+
+Install it with `scripts/deploy_usbem.py` and verify it with `tests/verify_usbem_connector.py`;
+[install_from_scratch.md](install_from_scratch.md) is the full walkthrough.
 
 For environment testing, the repo also includes:
-- `src/USBEM_genericJsonV2_Full.js`
 - `atf/install_usbem_atf.js`
 - `docs/atf_testing.md`
 
@@ -68,6 +71,15 @@ For synchronous incident creation:
 - `dti_short_description` populates incident `short_description`
 - event `description` populates incident `description`
 
+The `genericJsonV2` path adds two things on top. Any field that exists on `incident` can be sent
+under its real name (`category`, `caller_id`, `contact_type`, ...) and is written as-is, and the
+connector first applies the defaults the retired **EM - Generic Endpoint Create Incident** subflow
+used to apply — `u_netcool_ticket = true`, category `Software`, subcategory `Monitoring Alert`,
+caller `Event Management`, the alert in `u_generating_alert`, and a work note reading
+`Direct To Incident Via Event Management Generic JSON Endpoint` followed by
+`Incident Created From <alert number>`. Payload values override every one of them. See the README
+for the full table.
+
 If `direct_to_incident=true` and `dti_short_description` is omitted, the transform auto-fills `dti_short_description` from event `description`. This enables a minimal DTI payload that stays close to the standard event payload.
 
 If `dti_description` is present, it stays available in `additional_info` but is not used for incident creation.
@@ -111,14 +123,14 @@ Flow:
 3. return the incident in the API response
 4. complete alert attachment asynchronously after the response returns
 
-Nothing touches the alert during the request. Two actors attach it afterwards, and either may win:
+Nothing touches the alert during the request, and nothing is queued. The alert is attached by one
+actor: the synchronous `after` business rule on `em_alert` in
+[servicenow/USBEM_FastDtiAlertReconcile.business_rule.js](../servicenow/USBEM_FastDtiAlertReconcile.business_rule.js),
+which runs the moment Event Management creates or updates the alert.
 
-- the queued `x_usbna_usb_event.link_alert_later` event, handled by the `link_alert_later` Script Action. If the alert does not exist yet the handler re-queues itself `fast_dti_link_delay_seconds` apart (10 by default) for at most `fast_dti_link_max_retries` attempts (6), then returns `alert_not_found`.
-- the async `em_alert` reconcile rule in
-  [servicenow/USBEM_FastDtiAlertReconcile.business_rule.js](../servicenow/USBEM_FastDtiAlertReconcile.business_rule.js),
-  which fires as soon as Event Management creates or updates the alert.
-
-Both use the same conditional claim — the write only lands if the alert is still unlinked or still holds the exact incident that was inspected — so the second one to run reports `already_linked` rather than overwriting the first.
+The write is a conditional claim — it only lands if the alert is still unlinked or still holds the
+exact incident that was inspected — so a concurrent writer is never overwritten and the second
+actor reports `already_linked`.
 
 This branch returns before the alert exists and short-circuits the `usbem_wait_for_alert` handling, so a fast-path call returns no alert identifiers even when that flag is set.
 
@@ -152,6 +164,11 @@ Use `usbem_wait_seconds` to control the synchronous polling window.
 If omitted, the script uses its internal default.
 
 ## Response identifiers
+
+Every response carries `version` (the `USBEM_Core` release, unchanged from earlier builds) and a
+`versions` object naming the running version of the listener and of each Script Include. DTI
+results also carry `dti_version`. That is the fastest way to tell what an instance is actually
+running.
 
 USBEM returns `event_sys_id` for events.
 
@@ -237,8 +254,9 @@ Check:
 - whether the alert already had an incident
 - whether severity `0` / `5` suppressed auto-creation under the default map
 - whether no-wait processing returned `dti_mode=fast_async`
-- whether the async business rule `USBEM Fast DTI Alert Reconcile` is active on `em_alert`
-- whether Script Actions listening for `x_usbna_usb_event.fast_dti_event_name` are configured for the same event name
-- whether any scoped Script Actions instantiate `x_usbna_usb_event.USBEM_Core` / `x_usbna_usb_event.USBEM_DTI` instead of bare global class names
-- if the fallback event path is in use, whether `x_usbna_usb_event.link_alert_later` exists in **Event Registry** with table `incident`, and that its name has no stray characters
-- whether the `link_alert_later` Script Action source has real newlines. A copy stored with literal `\n` sequences never compiles, and the async linker silently never runs; `syslog` shows no `USBEM async alert linker outcome` entries at all
+- whether the business rule `USBEM Fast DTI Alert Reconcile` is active on `em_alert`, is `after`
+  (not async), and its condition still matches the events you are sending
+- what the endpoint reports in `versions`: a component that is not on the current release is
+  running older logic than the repo says
+- `syslog` for `USBEM fast DTI alert reconcile [v<version>] outcome`, which the rule logs whenever
+  it links or relinks an alert

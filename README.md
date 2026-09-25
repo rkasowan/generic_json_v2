@@ -1,7 +1,20 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.09.25.1`
+Repo version: `2026.09.25.3`
 Release history: [CHANGELOG.md](CHANGELOG.md)
+
+Every script in this project carries that version, and the endpoint reports all of them in every
+response under `versions`, so you can tell what an instance is actually running without opening a
+single record:
+
+```json
+"version": "2026.09.25.3",
+"versions": {"listener": "2026.09.25.3", "core": "2026.09.25.3",
+             "lookups": "2026.09.25.3", "debug": "2026.09.25.3", "dti": "2026.09.25.3"}
+```
+
+The business rule has no response to report into, so it logs its version with every outcome
+(`USBEM fast DTI alert reconcile [v2026.09.25.3] outcome: ...`).
 
 The repo release version is separate from the locked standalone ServiceNow transform in
 `standalone/genericMappedJson_transform.js`, which remains `2026-03-18a` for the final path.
@@ -11,8 +24,7 @@ The repo also carries the live modular `genericJsonV2` source layout used in PDI
 - `src/USBEM_Lookups.js`
 - `src/USBEM_Debug.js`
 - `src/USBEM_DTI.js`
-- `src/USBEM_genericJsonV2.js`
-- `src/USBEM_genericJsonV2_Full.js`
+- `servicenow/USBEM_genericJsonV2.listener.js`
 
 The repo also includes ATF assets for environment testing:
 - `atf/install_usbem_atf.js`
@@ -23,9 +35,15 @@ The Linux systemd synthetic under `synthetic/` runs every five minutes, validate
 ## Installing
 
 Starting from a clean instance: [docs/install_from_scratch.md](docs/install_from_scratch.md) walks
-through the scoped app, the four Script Includes, the inbound listener, the async linker, the
-reconcile rule, properties, the CI support tier fields, the cross-scope privileges and
-verification. Moving this work between existing instances: [docs/dti_transfer_package.md](docs/dti_transfer_package.md).
+through the scoped app, the four Script Includes, the inbound listener, the reconcile rule,
+properties, the CI support tier fields, the cross-scope privileges and verification. To push the
+repo at an instance and read back what it is running:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python3 scripts/deploy_usbem.py
+``` Moving this work between existing instances: [docs/dti_transfer_package.md](docs/dti_transfer_package.md).
 
 ## Purpose
 
@@ -47,8 +65,10 @@ Two source layouts are kept in the repo:
   - `src/USBEM_Lookups.js`
   - `src/USBEM_Debug.js`
   - `src/USBEM_DTI.js`
-  - `src/USBEM_genericJsonV2.js`
-- `src/USBEM_genericJsonV2_Full.js` is the fully inlined test build that embeds the listener plus all four script include components in one file
+  - `servicenow/USBEM_genericJsonV2.listener.js` — the listener script itself, which constructs
+    the four Script Includes and holds no copy of them. The inlined build that used to live in
+    `src/USBEM_genericJsonV2_Full.js` is gone: it drifted, and REST callers silently ran
+    months-old logic while the Script Includes were current
 - `atf/install_usbem_atf.js` is the idempotent Background Script installer for the `USBEM` parent ATF suite, the `USBEM genericJsonV2 API Coverage` child suite, and the helper include
 - `docs/atf_testing.md` documents installation, coverage, reruns, and execution flow
 
@@ -170,6 +190,32 @@ real names and they are written as-is:
 - `work_notes` goes on the incident, `alert_work_notes` on the alert; the legacy
   `dti_work_note` still works
 
+#### Defaults the connector applies first
+
+These reproduce the retired **EM - Generic Endpoint Create Incident** subflow, which is what this
+endpoint replaced. They are applied before the payload, so anything you send overrides them.
+
+| Field | Default | Notes |
+|---|---|---|
+| `u_netcool_ticket` | `true` | on every incident this connector creates; skipped where the field does not exist |
+| `category` | `Software` | |
+| `subcategory` | `Monitoring Alert` | |
+| `caller_id` | user `Event Management` | resolved through the reference field, so no sys_id is baked in |
+| `impact` / `urgency` | from the severity map | severity 1 and 2 give 2/2, which is what the subflow's "Create P2 Incident" step set |
+| `u_generating_alert` | the alert | written when the alert exists: at creation in wait mode, at link time on the fast path |
+| `assignment_group` | the alert's group | last resort only, after the payload group and the CI support tiers |
+| `work_notes` | `Direct To Incident Via Event Management Generic JSON Endpoint` + `Incident Created From <alert or message key>` | your own note is appended to it |
+
+An instance can refuse any of these — a scoped app is not always granted read on `sys_user` or
+write on `incident`. A refusal costs that one field, never the event: the names come back in
+`incident_defaults_skipped` and the incident is still created and returned.
+
+When an event reuses an existing incident instead of creating one, the connector adds
+`Duplicate event received via Event Management Generic JSON Endpoint (<message key>)`, as the
+subflow's duplicate branch did. Set `x_usbna_usb_event.dti_duplicate_work_note` to `false` to turn
+that off. Annotating an existing incident needs **write** access to `incident`; where the scope
+only has create, the response reports `incident_work_note: skipped` with a reason.
+
 ### Terminal incidents end the reuse window
 
 A message key stops reusing its incident once that incident reaches a terminal state. The next event opens a new incident, later events reuse the new one while it stays open, and the alert is moved across.
@@ -180,7 +226,7 @@ A message key stops reusing its incident once that incident reaches a terminal s
 - setting it to `0`, a state that does not exist, is the kill switch: it restores the pre-fix behaviour without a code change
 - the correlation lookup excludes terminal states in the query, so a key that has cycled through many incidents stays fast; among open incidents the oldest still wins
 
-Statuses that name a terminal skip or relink, in `dti_incident_status` and in the async linker's logged outcome:
+Statuses that name a terminal skip or relink, in `dti_incident_status` and in the reconcile rule's logged outcome:
 
 | Status | Meaning |
 |---|---|
@@ -405,55 +451,84 @@ Typical response fields:
 - `incident_number`
 - `dti_mode` — `fast_async` or `wait_for_incident`
 - `dti_incident_status` — how the incident was chosen; see the terminal-incident table above
-- `dti_link_status` — `queued` or `queue_failed` on the fast path
+- `dti_version` — the `USBEM_DTI` version that handled the incident
+- `incident_fields_applied` / `incident_fields_skipped` — which payload fields were written
+- `incident_netcool_ticket`, `incident_caller_default`, `incident_defaults_skipped` — what the
+  connector defaults did
+- `incident_work_note` — `reuse` when a duplicate note was added, `skipped` with
+  `incident_work_note_skipped_reason` when the instance would not allow it
 - `usbem_processing_ms`
 - `debug_steps` when `usbem_debug=true`
+- `version` and `versions` on the envelope, as shown at the top of this file
 
 ## Testing
 
-[tests/dti_terminal_incident_check.py](tests/dti_terminal_incident_check.py) checks the DTI behaviour against a live instance. Standard library only, self-cleaning, exit code 0/1.
-
 ```bash
-python3 tests/dti_terminal_incident_check.py            # all cases, both modes
-python3 tests/dti_terminal_incident_check.py --listener  # add the REST-path check
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python3 tests/verify_usbem_connector.py
 ```
 
-It covers a new key, an open incident in each open state, each terminal state and the events that follow, alert relinking, a closed alert, non-DTI and foreign-linked alerts, message keys longer than `correlation_id`, the async retry bound, and the CI support tier chain. Concurrency and timing are reported as observations. It needs an admin account, because it drives the Script Include through a background script.
+[tests/verify_usbem_connector.py](tests/verify_usbem_connector.py) drives the live endpoint the
+way a sender does, tags everything it creates with a unique prefix, deletes it afterwards, and
+exits non-zero if anything failed. Groups, selectable with `--only`:
+
+| Group | What it proves |
+|---|---|
+| `deploy` | the endpoint reports this release's version for every component, and each instance record still matches the file in this repo |
+| `compat` | the original contract holds: plain events, `records` batches, no incident without DTI, and the legacy `dti_short_description` / `dti_work_note` names |
+| `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, opens a new one once it is Resolved/Closed/Canceled, and the alert follows |
+| `wait` | the same cycle with `dti_wait_for_incident=true` |
+| `fields` | NetCool, category, subcategory, caller, impact/urgency, and every payload override |
+| `notes` | the connector note, the created-from line, sender notes on the incident, `alert_work_notes` on the alert, and a plain `work_notes` on a non-DTI alert |
+| `timing` | round-trip milliseconds for each path, reported as an observation |
+
+`--keep` leaves the records in place for inspection, `--json out.json` writes the results, and
+`--prefix` sets the tag. It needs an admin account: resolving and closing incidents goes through a
+background script, because the Table API trips over the mandatory close fields.
+
+**Python on macOS.** Use the venv and `requirements.txt` above. The scripts talk to ServiceNow
+through `requests`, which carries its own CA bundle; the stdlib `urllib` in a fresh macOS venv has
+no usable one and fails valid certificates with `CERTIFICATE_VERIFY_FAILED`. If your network
+terminates TLS with a corporate root, point `SN_CA_BUNDLE` at that root instead of disabling
+verification. `SN_VERIFY_SSL=false` exists as a last resort.
 
 ## Known gaps
 
-- **The deployed listener carries its own copy.** The `USBEM genericJsonV2` Event Management listener is an inlined build with its own older `USBEM_DTI`, `USBEM_Core` and `USBEM_Lookups`. Changes to the Script Includes do not reach callers of the REST endpoint until that build is regenerated. Only the async Script Action and the reconcile business rule use the Script Includes.
-- **`cmdb_rel_ci` read privilege.** Where the scope runs with `runtime_access_tracking = enforcing` and has no privilege for `cmdb_rel_ci`, any event that resolves to a real CI throws `ScopeAccessNotGrantedException` before the support-group logic runs.
-- **No duplicate protection on the fast path.** Simultaneous events for one key can each open an incident. This predates the terminal-incident work and is reported as an observation by the test suite.
-- **Message keys longer than `incident.correlation_id`** (100 characters out of box) can only be matched through the alert link, because the correlation lookup queries the full key. An event that arrives while the alert is briefly unlinked opens another incident.
+- **The scope cannot update incidents here.** `x_usbna_usb_event` runs with
+  `runtime_access_tracking = enforcing` and, on dev382837, is granted create but not write on
+  `incident`. Creating and returning an incident works; annotating one that already exists (the
+  duplicate work note) and writing `u_generating_alert` after the fact do not. Both report the
+  skip instead of failing the event. Grant the scope write on `incident` where those matter.
+- **`cmdb_rel_ci` read privilege.** Same enforcing scope, no privilege for `cmdb_rel_ci`: any
+  event that resolves to a real CI throws `ScopeAccessNotGrantedException` before the
+  support-group logic runs.
+- **No duplicate protection on the fast path.** Simultaneous events for one key can each open an
+  incident. This predates the terminal-incident work.
+- **Message keys longer than `incident.correlation_id`** (100 characters out of box) can only be
+  matched through the alert link, because the correlation lookup queries the full key. An event
+  that arrives while the alert is briefly unlinked opens another incident.
 
 ## Files in this bundle
 
+Runtime:
+
+- `src/USBEM_Core.js`, `src/USBEM_Lookups.js`, `src/USBEM_Debug.js`, `src/USBEM_DTI.js`
+- `servicenow/USBEM_genericJsonV2.listener.js` — the push connector listener
+- `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js` — the `em_alert` reconcile rule
+- `servicenow/install_ci_support_tier_fields.background.js` — the two CI support tier fields
+- `servicenow/USBEM_JabberwockyInboundEmail.flow_action.js` — the optional inbound email bridge
+- `standalone/genericMappedJson_transform.js` — the locked standalone transform
+
+Tooling:
+
+- `requirements.txt`, `scripts/usbem_client.py`
+- `scripts/deploy_usbem.py` — push the repo to an instance and read back its versions
+- `tests/verify_usbem_connector.py` — live end-to-end verification
+
+Docs:
+
+- `docs/install_from_scratch.md`, `docs/install_and_behavior.md`, `docs/dti_transfer_package.md`,
+  `docs/atf_testing.md`, `docs/production-transfer-inventory.md`
 - `atf/install_usbem_atf.js`
-- `src/USBEM_Core.js`
-- `src/USBEM_Lookups.js`
-- `src/USBEM_Debug.js`
-- `src/USBEM_DTI.js`
-- `src/USBEM_genericJsonV2.js`
-- `src/USBEM_genericJsonV2_Full.js`
-- `standalone/genericMappedJson_transform.js`
-- `docs/atf_testing.md`
-- `docs/dti_transfer_package.md`
-- `docs/install_and_behavior.md`
-- `docs/install_from_scratch.md`
-- `servicenow/install_ci_support_tier_fields.background.js`
-- `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js`
-- `tests/dti_terminal_incident_check.py`
-- `examples/ci_type_human_readable_label.json`
-- `examples/sample_bulk_payload.json`
-- `examples/sample_ci_identifier_payload.json`
-- `examples/sample_debug_verbose_payload.json`
-- `examples/sample_dti_custom_impact_urgency.json`
-- `examples/sample_dti_description_mapping.json`
-- `examples/sample_dti_wait_payload.json`
-- `examples/sample_expected_additional_info.json`
-- `examples/sample_legacy_additional_info_string.json`
-- `examples/sample_minimal_dti_payload.json`
-- `examples/sample_payload.json`
-- `examples/sample_payload_no_message_key.json`
-- `examples/sample_usbem_lookup_payload.json`
+- `examples/` — sample payloads for each supported shape
