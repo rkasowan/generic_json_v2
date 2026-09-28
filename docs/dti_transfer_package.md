@@ -79,18 +79,20 @@ value stops taking effect — intended: an incident with no resolvable group is 
 
 ## 5. Environment-specific — re-check in the target
 
-- **Incident fields.** `u_netcool_ticket` must exist on `incident` (boolean) or the NetCool flag is
-  silently skipped. `u_generating_alert` (reference → `em_alert`) exists in the customer dictionary
-  but not on dev382837, so that mapping is untested there.
+- **Incident fields.** `u_netcool_ticket` (boolean) and `u_generating_alert` (reference →
+  `em_alert`) must exist on `incident`, or those two mappings are skipped without failing the
+  event. Both exist on dev382837 and are verified there as of 2026-09-28.
 - **The `Event Management` user.** The default caller is resolved by display value. A target
   without that user gets no default caller and reports `incident_caller_default: unresolved`.
 - **Category and subcategory.** The defaults are the literals `Software` and `Monitoring Alert`.
   Where the choice exists they resolve to its value; where it does not, the literal is written.
   dev382837 has no `Monitoring Alert` choice, so it stores the literal.
-- **Cross-scope privileges.** `x_usbna_usb_event` runs with `runtime_access_tracking = enforcing`.
-  dev382837 has no `cmdb_rel_ci` read (CI-derived assignment groups cannot work) and no `incident`
-  write (the duplicate work note and post-creation `u_generating_alert` are skipped and reported).
-  Grant both where those behaviours are expected.
+- **Cross-scope privileges.** `x_usbna_usb_event` runs with `runtime_access_tracking = enforcing`
+  and needs `incident` read+create+write and `cmdb_rel_ci` read. Without the incident write the
+  duplicate work note and post-creation `u_generating_alert` are skipped and reported; without
+  `cmdb_rel_ci` read, CI-derived assignment groups cannot work at all. Both were granted on
+  dev382837 on 2026-09-28. The rows usually exist already with status `requested` — flip them to
+  `allowed` rather than creating new ones.
 - **Group references.** Nothing hardcodes a group, but the CI fields point at `sys_user_group`
   records whose sys_ids differ per environment. CI data is not part of this package.
 

@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from usbem_client import ServiceNow, ServiceNowError, load_credentials  # noqa: E402
 
-VERSION = "2026.09.25.3"
+VERSION = "2026.09.28.1"
 PROJECT = Path(__file__).resolve().parents[1]
 SCOPE = "x_usbna_usb_event"
 

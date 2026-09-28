@@ -12,7 +12,7 @@
  * an instance is visible in the response instead of needing a code comparison.
  */
 (function process(/*RESTAPIRequest*/ request, body) {
-    var LISTENER_VERSION = '2026.09.25.3';
+    var LISTENER_VERSION = '2026.09.28.1';
     var core = new x_usbna_usb_event.USBEM_Core({ request: request });
     var lookups = new x_usbna_usb_event.USBEM_Lookups(core);
     var debugHelper = new x_usbna_usb_event.USBEM_Debug(core);

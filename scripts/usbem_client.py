@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-VERSION = "2026.09.25.3"
+VERSION = "2026.09.28.1"
 
 # Python 3.9 on macOS links LibreSSL, and urllib3 2.x warns about it on every import. The
 # warning is noise here: ServiceNow is reached over TLS 1.2+ either way.
@@ -55,16 +55,21 @@ _USER_KEYS = ("servicenow_user", "SN_USERNAME", "user", "SN_USER")
 _PASSWORD_KEYS = ("servicenow_password", "SN_PASSWORD", "password")
 
 
+def _parse_env(path: Path) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    for raw in path.read_text(errors="replace").splitlines():
+        if "=" in raw and not raw.lstrip().startswith("#"):
+            key, value = raw.split("=", 1)
+            values[key.strip()] = value.strip().strip("\"'")
+    return values
+
+
 def _read_env_file(start: Path) -> Dict[str, str]:
+    """The nearest .env at or above `start`."""
     for folder in [start] + list(start.parents):
         env_file = folder / ".env"
         if env_file.is_file():
-            values: Dict[str, str] = {}
-            for raw in env_file.read_text(errors="replace").splitlines():
-                if "=" in raw and not raw.lstrip().startswith("#"):
-                    key, value = raw.split("=", 1)
-                    values[key.strip()] = value.strip().strip("\"'")
-            return values
+            return _parse_env(env_file)
     return {}
 
 
@@ -80,7 +85,13 @@ def load_credentials(env_file: Optional[str] = None) -> tuple[str, str, str]:
     """(instance_url, user, password) from the environment or the nearest .env."""
     sources: List[Dict[str, str]] = [dict(os.environ)]
     if env_file:
-        sources.append(_read_env_file(Path(env_file).expanduser().resolve().parent))
+        # The file the caller named, not "the nearest .env next to it" - pointing --env-file at a
+        # specific instance's credentials and silently getting a different .env is how you deploy
+        # to the wrong instance.
+        named = Path(env_file).expanduser()
+        if not named.is_file():
+            sys.exit(f"--env-file {named} does not exist")
+        sources.append(_parse_env(named))
     sources.append(_read_env_file(Path(__file__).resolve().parent))
 
     instance = _first(sources, _INSTANCE_KEYS).rstrip("/")

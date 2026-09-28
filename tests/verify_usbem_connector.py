@@ -16,7 +16,9 @@ Groups:
     fast        direct_to_incident without waiting: an incident comes back immediately
     wait        dti_wait_for_incident: the incident is created against the alert
     fields      incident field mapping inherited from the retired subflow
+    ci          the assignment group chain: payload, then CI support_group, then the level 2 tier
     notes       work notes on both the incident and the alert
+    edge        message keys longer than correlation_id, concurrent events, DTI inside a batch
     timing      how long each path takes (reported, never failed)
 
 Exit code is 0 only when every check passed. Credentials and TLS: see scripts/usbem_client.py.
@@ -29,6 +31,7 @@ import json
 import statistics
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -36,11 +39,11 @@ sys.path.insert(0, str(PROJECT / "scripts"))
 
 from usbem_client import MARK, ServiceNow, ServiceNowError, load_credentials  # noqa: E402
 
-VERSION = "2026.09.25.3"
+VERSION = "2026.09.28.1"
 RELEASE = (PROJECT / "VERSION").read_text().strip()
 
 TERMINAL_STATES = (("6", "Resolved"), ("7", "Closed"), ("8", "Canceled"))
-GROUPS = ("deploy", "compat", "fast", "wait", "fields", "notes", "timing")
+GROUPS = ("deploy", "compat", "fast", "wait", "fields", "ci", "notes", "edge", "timing")
 
 # Records this project owns, and the file each one must match.
 DEPLOYED = [
@@ -91,7 +94,10 @@ class Verifier:
         return self.sn.push_event(self.payload(case, **overrides))
 
     def alerts_for(self, key: str) -> list[dict]:
-        return self.sn.table("em_alert", "message_key=" + key,
+        # Ordered, because a key can end up with more than one alert: with
+        # evt_mgmt.alert_reopens_incident = new, resolving the incident closes the alert and the
+        # next event opens a fresh one. Unordered results made "which alert" a coin toss.
+        return self.sn.table("em_alert", "message_key=" + key + "^ORDERBYsys_created_on",
                              "sys_id,number,incident,state,severity,assignment_group", 20)
 
     def incidents_for(self, key: str) -> list[dict]:
@@ -116,6 +122,24 @@ class Verifier:
                 return True
             time.sleep(3)
         return False
+
+    def wait_any_alert_linked(self, key: str, incident_sys_id: str) -> dict:
+        """Any alert for this key holding that incident.
+
+        Asserting on one particular alert is wrong once a key has two of them: the alert that
+        closed with the old incident keeps it, by design, and it is the live one that must move.
+        """
+        deadline = time.time() + self.alert_wait
+        while True:
+            for alert in self.alerts_for(key):
+                if str(alert.get("incident", "")) == incident_sys_id:
+                    return alert
+            if time.time() >= deadline:
+                return {}
+            time.sleep(3)
+
+    def field_exists(self, table: str, element: str) -> bool:
+        return bool(self.sn.table("sys_dictionary", f"name={table}^element={element}", "sys_id", 1))
 
     def journal(self, table: str, sys_id: str, element: str = "work_notes") -> str:
         rows = self.sn.table("sys_journal_field",
@@ -184,6 +208,28 @@ gs.print('%s' + JSON.stringify(out));
                                 "name,active", 5)
         self.check("deploy", "no async link script action", not actions,
                    "none active" if not actions else str([a["name"] for a in actions]))
+
+        # "Nothing queues an event" is a requirement, not a preference: the retired design put a
+        # sysevent on the queue per DTI request. Old rows from that design are still on the table,
+        # so this sends a DTI event and proves nothing NEW lands.
+        def newest_queued() -> str:
+            rows = self.sn.table("sysevent",
+                                 "nameSTARTSWITHx_usbna_usb_event^ORDERBYDESCsys_created_on",
+                                 "sys_created_on", 1)
+            return rows[0]["sys_created_on"] if rows else ""
+
+        before = newest_queued()
+        self.push("deploy-queue-probe", direct_to_incident="true")
+        time.sleep(5)
+        after = newest_queued()
+        self.check("deploy", "a DTI request queues no sysevent", after == before,
+                   "nothing new on sysevent" if after == before
+                   else f"a row appeared at {after} (newest was {before})")
+
+        jobs = self.sn.table("sysauto_script", "active=true^scriptLIKEUSBEM_DTI^ORactive=true^nameLIKEUSBEM",
+                             "name", 5)
+        self.check("deploy", "no scheduled job drives this", not jobs,
+                   "none" if not jobs else str([j["name"] for j in jobs]))
 
     def group_compat(self) -> None:
         response = self.push("compat-plain", severity="2")
@@ -269,10 +315,19 @@ gs.print('%s' + JSON.stringify(out));
             if fresh:
                 alerts = self.wait_alert(self.key(case))
                 if alerts:
-                    relinked = self.wait_linked(alerts[0]["sys_id"], after["incident_sys_id"])
-                    self.check(group, f"{label}: alert follows", relinked,
-                               f"{alerts[0]['number']} -> {after.get('incident_number')}" if relinked
-                               else "alert did not move")
+                    linked = self.wait_any_alert_linked(self.key(case), after["incident_sys_id"])
+                    self.check(group, f"{label}: alert follows", bool(linked),
+                               f"{linked['number']} -> {after.get('incident_number')}"
+                               f"{' (of %d alerts for the key)' % len(self.alerts_for(self.key(case))) if linked else ''}"
+                               if linked else
+                               f"no alert for the key points at {after.get('incident_number')}; "
+                               f"links are {[a.get('incident', '') [:8] for a in self.alerts_for(self.key(case))]}")
+                    if group == "fast":
+                        # The alert already existed, so the fast path must have claimed it inside
+                        # the request rather than leaving it to the business rule.
+                        self.check(group, f"{label}: claimed during the request",
+                                   after.get("alert_link_status") in ("relinked", "linked", "already_linked"),
+                                   f"alert_link_status={after.get('alert_link_status') or '(absent)'}")
                 repeat = self.push(case, **extra)
                 self.check(group, f"{label}: next event reuses the new one",
                            repeat.get("incident_sys_id") == after["incident_sys_id"],
@@ -332,6 +387,13 @@ gs.print('%s' + JSON.stringify(out));
         self.check("fields", "any OOB field can be written",
                    all(f in applied for f in ("category", "subcategory", "contact_type", "caller_id")),
                    "applied: " + applied)
+
+        # A misspelled field must come back named, not vanish silently.
+        typo = self.push("fields-typo", direct_to_incident="true", catgeory="Network",
+                         short_description="typo check")
+        skipped = str(typo.get("incident_fields_skipped", ""))
+        self.check("fields", "an unknown field name is reported", "catgeory" in skipped,
+                   f"incident_fields_skipped={skipped or '(empty)'}")
         self.check("fields", "payload category wins",
                    str(display("category")).lower() == "network" and str(display("subcategory")).lower() == "dns",
                    f"{display('category')}/{display('subcategory')}")
@@ -343,6 +405,9 @@ gs.print('%s' + JSON.stringify(out));
         self.check("fields", "NetCool stays true under overrides",
                    str(value("u_netcool_ticket")) in ("1", "true"), str(value("u_netcool_ticket")))
 
+        self.check_severity_tiers()
+        self.check_generating_alert()
+
         group_row = self.sn.table("sys_user_group", "active=true", "sys_id,name", 1)
         if group_row:
             named = self.push("fields-group", direct_to_incident="true",
@@ -352,6 +417,169 @@ gs.print('%s' + JSON.stringify(out));
                 self.check("fields", "payload assignment_group wins",
                            str(display("assignment_group")) == group_row[0]["name"],
                            f"{display('assignment_group')} (asked for {group_row[0]['name']})")
+
+    def check_severity_tiers(self) -> None:
+        """The subflow created a P2 for Critical/Major, a P3 for Minor and a P4 for the rest, with
+        impact and urgency both 2, 3 and 4 respectively. Severity 0 and 5 create nothing."""
+        for severity, expected in (("1", "2"), ("2", "2"), ("3", "3"), ("4", "4")):
+            case = f"fields-sev{severity}"
+            response = self.push(case, direct_to_incident="true", severity=severity)
+            sys_id = response.get("incident_sys_id", "")
+            if not sys_id:
+                self.check("fields", f"severity {severity} -> impact/urgency {expected}", False,
+                           f"no incident: {response.get('dti_incident_status')}")
+                continue
+            row = self.sn.record("incident", sys_id, "impact,urgency")
+            self.check("fields", f"severity {severity} -> impact/urgency {expected}",
+                       (str(row.get("impact")), str(row.get("urgency"))) == (expected, expected),
+                       f"impact={row.get('impact')} urgency={row.get('urgency')}")
+
+        for severity in ("0", "5"):
+            response = self.push(f"fields-sev{severity}", direct_to_incident="true", severity=severity)
+            self.check("fields", f"severity {severity} creates no incident",
+                       not response.get("incident_sys_id") and
+                       response.get("dti_incident_status") == "suppressed_by_severity_map",
+                       f"status={response.get('dti_incident_status')} "
+                       f"incident={response.get('incident_number') or '(none)'}")
+
+    def check_generating_alert(self) -> None:
+        """incident.u_generating_alert is customer-specific. Where it exists it must point at the
+        alert that produced the incident; where it does not, say so rather than passing quietly."""
+        if not self.field_exists("incident", "u_generating_alert"):
+            self.check("fields", "u_generating_alert points at the alert", None,
+                       "field is not on this instance, mapping not exercised")
+            return
+        response = self.push("fields-genalert", direct_to_incident="true",
+                             dti_wait_for_incident="true", usbem_wait_seconds="45")
+        incident_sys_id = response.get("incident_sys_id", "")
+        alert_sys_id = response.get("alert_sys_id", "")
+        if not incident_sys_id:
+            self.check("fields", "u_generating_alert points at the alert", False,
+                       f"no incident: {response.get('dti_incident_status')}")
+            return
+        if not alert_sys_id:
+            alerts = self.wait_alert(self.key("fields-genalert"))
+            alert_sys_id = alerts[0]["sys_id"] if alerts else ""
+        row = self.sn.record("incident", incident_sys_id, "u_generating_alert")
+        self.check("fields", "u_generating_alert points at the alert",
+                   bool(alert_sys_id) and str(row.get("u_generating_alert", "")) == alert_sys_id,
+                   f"u_generating_alert={row.get('u_generating_alert') or '(empty)'} alert={alert_sys_id or '(none)'}")
+
+        # The fast path creates the incident before the alert exists, so the reference can only be
+        # written when they are linked. A second event for the same key exercises that.
+        repeat = self.push("fields-genalert-fast", direct_to_incident="true")
+        first_incident = repeat.get("incident_sys_id", "")
+        self.wait_alert(self.key("fields-genalert-fast"))
+        again = self.push("fields-genalert-fast", direct_to_incident="true")
+        incident_sys_id = again.get("incident_sys_id", "") or first_incident
+        alerts = self.alerts_for(self.key("fields-genalert-fast"))
+        alert_sys_id = alerts[0]["sys_id"] if alerts else ""
+        time.sleep(3)
+        row = self.sn.record("incident", incident_sys_id, "u_generating_alert") if incident_sys_id else {}
+        self.check("fields", "u_generating_alert set on a fast-path incident",
+                   bool(alert_sys_id) and str(row.get("u_generating_alert", "")) == alert_sys_id,
+                   f"u_generating_alert={row.get('u_generating_alert') or '(empty)'} "
+                   f"alert={alert_sys_id or '(none)'} link={again.get('alert_link_status')}")
+
+    def group_ci(self) -> None:
+        """The assignment group chain against a real CI: payload beats the CI's support_group,
+        which beats the level 2 tier. Needs read on cmdb_rel_ci, or CI resolution throws before
+        any of this runs."""
+        cis = self.sn.table("cmdb_ci_server", "operational_status=1^nameISNOTEMPTY", "sys_id,name", 5)
+        groups = self.sn.table("sys_user_group", "active=true", "sys_id,name", 3)
+        if not cis or len(groups) < 3:
+            self.check("ci", "fixtures available", False,
+                       f"{len(cis)} server CI(s), {len(groups)} group(s)")
+            return
+        ci, (level2, support, payload) = cis[0], groups[:3]
+        has_tier_field = self.field_exists("cmdb_ci", "u_level_2_support_assignee_group")
+        original = self.sn.record("cmdb_ci", ci["sys_id"],
+                                  "support_group,u_level_2_support_assignee_group"
+                                  if has_tier_field else "support_group")
+
+        def incident_group(case: str, **extra):
+            response = self.push(case, node=ci["name"], direct_to_incident="true", **extra)
+            sys_id = response.get("incident_sys_id", "")
+            if not sys_id:
+                return response, {}
+            return response, self.sn.record("incident", sys_id, "assignment_group,cmdb_ci",
+                                            display="all")
+
+        def display(row, field):
+            cell = row.get(field)
+            return (cell.get("display_value") if isinstance(cell, dict) else cell) or ""
+
+        try:
+            blank = {"support_group": ""}
+            if has_tier_field:
+                blank["u_level_2_support_assignee_group"] = ""
+            self.sn.update("cmdb_ci", ci["sys_id"], blank)
+
+            response, row = incident_group("ci-baseline")
+            resolved_ci = display(row, "cmdb_ci")
+            self.check("ci", "event node resolves to the CI", resolved_ci == ci["name"],
+                       f"cmdb_ci={resolved_ci or '(none)'} (sent node={ci['name']})")
+            self.check("ci", "no group when the CI has none", not display(row, "assignment_group"),
+                       f"assignment_group={display(row, 'assignment_group') or '(empty)'}")
+
+            if has_tier_field:
+                self.sn.update("cmdb_ci", ci["sys_id"],
+                               {"u_level_2_support_assignee_group": level2["sys_id"]})
+                response, row = incident_group("ci-level2")
+                self.check("ci", "level 2 tier is used", display(row, "assignment_group") == level2["name"],
+                           f"{display(row, 'assignment_group') or '(empty)'} (expected {level2['name']})")
+            else:
+                self.check("ci", "level 2 tier is used", None,
+                           "cmdb_ci.u_level_2_support_assignee_group is not on this instance")
+
+            self.sn.update("cmdb_ci", ci["sys_id"], {"support_group": support["sys_id"]})
+            response, row = incident_group("ci-support")
+            self.check("ci", "support_group beats the level 2 tier",
+                       display(row, "assignment_group") == support["name"],
+                       f"{display(row, 'assignment_group') or '(empty)'} (expected {support['name']})")
+
+            response, row = incident_group("ci-payload", assignment_group=payload["name"])
+            self.check("ci", "payload group beats the CI",
+                       display(row, "assignment_group") == payload["name"],
+                       f"{display(row, 'assignment_group') or '(empty)'} (expected {payload['name']})")
+
+            # Last resort: nothing on the payload, nothing on the CI, but the alert already
+            # carries a group. On a real instance that group comes from an Event Management alert
+            # rule; here the harness puts it on the alert directly, because whether this PDI has
+            # such a rule is not what is being tested. Only the wait path can reach this tier -
+            # the fast path creates the incident before there is an alert to read.
+            self.sn.update("cmdb_ci", ci["sys_id"],
+                           {"support_group": "", "u_level_2_support_assignee_group": ""}
+                           if has_tier_field else {"support_group": ""})
+            self.push("ci-alertgroup", node=ci["name"], severity="3")   # non-DTI: just make the alert
+            alerts = self.wait_alert(self.key("ci-alertgroup"))
+            if not alerts:
+                self.check("ci", "the alert's own group is the last resort", False, "no alert created")
+            else:
+                self.sn.update("em_alert", alerts[0]["sys_id"], {"assignment_group": level2["sys_id"]})
+                response = self.push("ci-alertgroup", node=ci["name"], direct_to_incident="true",
+                                     dti_wait_for_incident="true", usbem_wait_seconds="45")
+                if not response.get("incident_sys_id"):
+                    self.check("ci", "the alert's own group is the last resort", False,
+                               f"no incident: {response.get('dti_incident_status')}")
+                else:
+                    row = self.sn.record("incident", response["incident_sys_id"], "assignment_group",
+                                         display="all")
+                    got = display(row, "assignment_group")
+                    self.check("ci", "the alert's own group is the last resort",
+                               got == level2["name"] and response.get("assignment_group_source") == "alert",
+                               f"{got or '(empty)'} (expected {level2['name']}) "
+                               f"source={response.get('assignment_group_source') or '(absent)'}")
+        finally:
+            restore = {"support_group": original.get("support_group", "") or ""}
+            if has_tier_field:
+                restore["u_level_2_support_assignee_group"] = \
+                    original.get("u_level_2_support_assignee_group", "") or ""
+            self.sn.update("cmdb_ci", ci["sys_id"], restore)
+            back = self.sn.record("cmdb_ci", ci["sys_id"], ",".join(restore))
+            self.check("ci", "CI restored",
+                       all(str(back.get(f, "")) == str(v) for f, v in restore.items()),
+                       f"{ci['name']}: " + ", ".join(f"{f}={back.get(f) or '(empty)'}" for f in restore))
 
     def group_notes(self) -> None:
         response = self.push("notes-incident", direct_to_incident="true",
@@ -364,11 +592,38 @@ gs.print('%s' + JSON.stringify(out));
         self.check("notes", "connector note on the incident",
                    "Direct To Incident Via Event Management Generic JSON Endpoint" in notes,
                    notes.splitlines()[0] if notes else "no work notes")
-        self.check("notes", "created-from line present", "Incident Created From" in notes,
-                   "yes" if "Incident Created From" in notes else "missing")
         self.check("notes", "sender work_notes on the incident",
                    "sender note for the incident" in notes,
                    "yes" if "sender note for the incident" in notes else "missing")
+
+        # The fast path creates the incident before the alert exists, so its created-from line can
+        # only name the message key. The wait path has the alert in hand, and there the line must
+        # carry the alert's number - that is what the subflow wrote.
+        waited = self.push("notes-createdfrom", direct_to_incident="true",
+                           dti_wait_for_incident="true", usbem_wait_seconds="45")
+        if waited.get("incident_sys_id"):
+            alert_number = waited.get("alert_number", "")
+            if not alert_number:
+                alerts = self.wait_alert(self.key("notes-createdfrom"))
+                alert_number = alerts[0]["number"] if alerts else ""
+            waited_notes = self.journal("incident", waited["incident_sys_id"])
+            self.check("notes", "created-from names the alert",
+                       bool(alert_number) and f"Incident Created From {alert_number}" in waited_notes,
+                       f"looked for 'Incident Created From {alert_number or '(no alert)'}'")
+        else:
+            self.check("notes", "created-from names the alert", False,
+                       f"no incident: {waited.get('dti_incident_status')}")
+
+        legacy = self.push("notes-legacy", direct_to_incident="true",
+                           dti_work_note="legacy note via dti_work_note")
+        if legacy.get("incident_sys_id"):
+            legacy_notes = self.journal("incident", legacy["incident_sys_id"])
+            self.check("notes", "legacy dti_work_note reaches the incident",
+                       "legacy note via dti_work_note" in legacy_notes,
+                       "written" if "legacy note via dti_work_note" in legacy_notes else "missing")
+        else:
+            self.check("notes", "legacy dti_work_note reaches the incident", False,
+                       f"no incident: {legacy.get('dti_incident_status')}")
 
         repeat = self.push("notes-incident", direct_to_incident="true",
                            work_notes="second sender note")
@@ -377,12 +632,12 @@ gs.print('%s' + JSON.stringify(out));
         written = "Duplicate event received" in notes and "second sender note" in notes
         skipped = str(repeat.get("incident_work_note", "")) == "skipped"
         # Annotating an incident that already exists needs write access to the incident table.
-        # A scope that can create incidents but not update them reports the skip instead of
-        # failing the event, and that is a supported (reported) state, not a regression.
+        # Where the scope has it this must be written; where it does not, the connector reports
+        # the skip instead of failing the event, which is a reported state, not a regression.
         self.check("notes", "reuse adds a duplicate note", True if written else (None if skipped else False),
                    f"status={repeat.get('dti_incident_status')}" if written else
-                   (f"skipped: {repeat.get('incident_work_note_skipped_reason')}" if skipped else
-                    "no duplicate note and no skip reported"))
+                   (f"skipped: {repeat.get('incident_work_note_skipped_reason')} - grant the scope "
+                    "write on incident" if skipped else "no duplicate note and no skip reported"))
 
         self.push("notes-alert", alert_work_notes="sender note for the alert")
         alerts = self.wait_alert(self.key("notes-alert"))
@@ -396,6 +651,41 @@ gs.print('%s' + JSON.stringify(out));
         else:
             self.check("notes", "alert_work_notes on the alert", False, "no alert created")
 
+        # Regression guard. The note travels in the alert's additional_info, and the reconcile rule
+        # runs on every alert write, so a connector that does not consume the key re-posts the same
+        # note on writes that never asked for one. One event carries the note; the writes that
+        # follow do not, and must not produce a second copy of it.
+        self.push("notes-alert-once", alert_work_notes="post me exactly once")
+        alerts = self.wait_alert(self.key("notes-alert-once"))
+        if not alerts:
+            self.check("notes", "the note is not re-posted on later alert writes", False,
+                       "no alert created")
+        else:
+            alert_sys_id = alerts[0]["sys_id"]
+            time.sleep(4)
+            self.push("notes-alert-once", severity="2")      # same key, no note on the payload
+            time.sleep(4)
+            # ...and a write that has nothing to do with Event Management's event pipeline.
+            self.sn.update("em_alert", alert_sys_id, {"description": "touched by verification"})
+            time.sleep(4)
+            entries = [e for e in self.journal("em_alert", alert_sys_id).splitlines()
+                       if "post me exactly once" in e]
+            self.check("notes", "the note is not re-posted on later alert writes", len(entries) == 1,
+                       f"{alerts[0]['number']}: {len(entries)} copies of the note after two "
+                       f"further alert writes")
+
+        # A DTI sender's plain work_notes belongs to the incident, not to the alert as well.
+        dti_note = self.push("notes-dti-plain", direct_to_incident="true",
+                             work_notes="incident only, not the alert")
+        alerts = self.wait_alert(self.key("notes-dti-plain"))
+        if alerts and dti_note.get("incident_sys_id"):
+            time.sleep(4)
+            on_alert = "incident only, not the alert" in self.journal("em_alert", alerts[0]["sys_id"])
+            on_incident = "incident only, not the alert" in self.journal("incident", dti_note["incident_sys_id"])
+            self.check("notes", "a DTI work_notes does not also land on the alert",
+                       on_incident and not on_alert,
+                       f"incident={on_incident} alert={on_alert}")
+
         self.push("notes-alert-plain", work_notes="plain note, no incident")
         alerts = self.wait_alert(self.key("notes-alert-plain"))
         if alerts:
@@ -407,6 +697,53 @@ gs.print('%s' + JSON.stringify(out));
                                               else ": missing"))
         else:
             self.check("notes", "work_notes reach a non-DTI alert", False, "no alert created")
+
+    def group_edge(self) -> None:
+        # incident.correlation_id is String(100) but em_alert.message_key holds 1024, so a long
+        # key cannot round-trip through correlation_id. The connector must still converge on one
+        # incident for that key rather than opening one per event.
+        long_key = (self.prefix + "-edge-long-" + ("k" * 130))[:180]
+        numbers, statuses = [], []
+        for _ in range(3):
+            response = self.sn.push_event({
+                "source": "usbem-verify", "event_class": "usbem-verify",
+                "node": f"{self.prefix.lower()}-host", "resource": "edge-long",
+                "metric_name": "verify", "severity": "1", "message_key": long_key,
+                "description": "USBEM verification long key", "direct_to_incident": "true"})
+            numbers.append(response.get("incident_number", ""))
+            statuses.append(response.get("dti_incident_status", ""))
+        open_incidents = [i for i in self.sn.table(
+            "incident", f"correlation_idSTARTSWITH{self.prefix}-edge-long^stateNOT IN6,7,8",
+            "sys_id,number", 20)]
+        self.check("edge", "long message key converges on one incident",
+                   len(set(n for n in numbers if n)) == 1 and len(open_incidents) <= 1,
+                   f"returned {numbers}, {len(open_incidents)} open incident(s), statuses {statuses}")
+
+        # Two events for one key at the same instant. There is no duplicate protection on the fast
+        # path, so this is reported, not failed - but a regression that opens three would show.
+        concurrent_key = self.key("edge-concurrent")
+        payload = self.payload("edge-concurrent", direct_to_incident="true")
+        clients = [ServiceNow(self.sn.instance, self.sn.user, self.sn._password) for _ in range(2)]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda c: c.push_event(payload), clients))
+        distinct = sorted(set(r.get("incident_number", "") for r in responses))
+        self.check("edge", "concurrent events for one key", None,
+                   f"returned {distinct}, statuses "
+                   f"{[r.get('dti_incident_status') for r in responses]}")
+        _ = concurrent_key
+
+        # A batch where only one record asks for an incident: the batch must still answer for
+        # every record, and only that record may produce an incident.
+        batch = self.sn.push_event({"records": [
+            self.payload("edge-batch-plain", severity="3"),
+            self.payload("edge-batch-dti", severity="1", direct_to_incident="true"),
+        ]})
+        results = batch.get("results") or []
+        with_incident = [r for r in results if r.get("incident_sys_id")]
+        self.check("edge", "DTI inside a batch",
+                   batch.get("inserted") == "2" and len(with_incident) == 1,
+                   f"inserted={batch.get('inserted')}, {len(with_incident)} of {len(results)} "
+                   f"result(s) carry an incident")
 
     def group_timing(self) -> None:
         samples = {"plain": [], "fast": [], "wait": []}

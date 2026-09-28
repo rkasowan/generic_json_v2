@@ -108,12 +108,15 @@ Default map:
 
 ## Wait behavior
 
-In scoped apps this build avoids `gs.sleep` and uses record-state polling instead.
+Waiting holds a REST worker thread until the record appears or the window expires. Between polls
+the loop yields with `gs.sleep` — allowed in a scoped application on current releases, verified on
+Zurich — and falls back to spinning only where an instance refuses it. Before 2026.09.28.1 it
+always spun, burning a worker at full CPU for the whole window.
 
 
 ### `usbem_wait_for_alert=true`
 
-Poll the inserted event and related alert state (scope-safe, no `gs.sleep`) and return alert identifiers.
+Poll the inserted event and the alert it produces, and return alert identifiers.
 
 ### `direct_to_incident=true` without `dti_wait_for_incident=true`
 
@@ -121,10 +124,10 @@ Flow:
 1. insert event
 2. reuse the key's open incident, or open a new one if there is none or the last one is finished
 3. return the incident in the API response
-4. complete alert attachment asynchronously after the response returns
+4. claim the alert during the request when it already exists, and otherwise leave the link to the reconcile rule
 
-Nothing touches the alert during the request, and nothing is queued. The alert is attached by one
-actor: the synchronous `after` business rule on `em_alert` in
+Nothing is queued. For the first event of a message key there is no alert yet, and the link is made
+by the synchronous `after` business rule on `em_alert` in
 [servicenow/USBEM_FastDtiAlertReconcile.business_rule.js](../servicenow/USBEM_FastDtiAlertReconcile.business_rule.js),
 which runs the moment Event Management creates or updates the alert.
 
@@ -132,7 +135,7 @@ The write is a conditional claim — it only lands if the alert is still unlinke
 exact incident that was inspected — so a concurrent writer is never overwritten and the second
 actor reports `already_linked`.
 
-This branch returns before the alert exists and short-circuits the `usbem_wait_for_alert` handling, so a fast-path call returns no alert identifiers even when that flag is set.
+This branch short-circuits the `usbem_wait_for_alert` handling, so a fast-path call returns no alert identifiers even when that flag is set — it never waits, whether or not an alert already exists.
 
 ### `direct_to_incident=true` with `dti_wait_for_incident=true`
 
@@ -232,18 +235,19 @@ Check:
 
 Check:
 - whether `x_usbna_usb_event.dti_terminal_incident_states` is set to something unparseable, or to `0`
-- whether the caller reached the Script Include at all: the deployed `USBEM genericJsonV2` listener inlines its own older copy of these classes, so REST callers keep the old behaviour until that build is regenerated
+- what the endpoint reports in `versions`: a component that is not on the current release is running older logic than the repo says
 
 ### No assignment group on the incident
 
 The order is: `assignment_group` on the event, then `cmdb_ci.support_group`, then
-`cmdb_ci.u_level_2_support_assignee_group`, then unassigned.
+`cmdb_ci.u_level_2_support_assignee_group`, then the alert's own group where an alert already
+exists (reported as `assignment_group_source: alert`), then unassigned.
 
 Check:
 - `assignment_group` on the payload, and whether the name resolved
 - `cmdb_ci.support_group` and `cmdb_ci.u_level_2_support_assignee_group` on the resolved CI
 - whether a CI resolved at all; with no CI there is nothing to read a group from
-- whether the scope can read `cmdb_rel_ci`. With `runtime_access_tracking = enforcing` and no privilege for that table, CI resolution throws `ScopeAccessNotGrantedException` before the group logic runs
+- whether the scope can read `cmdb_rel_ci`. With `runtime_access_tracking = enforcing` and no privilege for that table, CI resolution throws `ScopeAccessNotGrantedException` before the group logic runs (granted on dev382837 since 2026-09-28)
 - there is deliberately no default group, so an unresolved incident stays unassigned
 
 ### DTI did not create an incident

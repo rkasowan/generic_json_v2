@@ -42,7 +42,7 @@ The no-wait DTI test intentionally validates both pieces of the contract:
 - the response comes back in `fast_async` mode with an incident id immediately
 - the record set still settles to one linked incident after the delayed duplicate window
 
-For a clean deployment, make sure the async alert reconcile rule from
+For a clean deployment, make sure the synchronous `after` alert reconcile rule from
 [servicenow/USBEM_FastDtiAlertReconcile.business_rule.js](../servicenow/USBEM_FastDtiAlertReconcile.business_rule.js)
 is installed and active before running the no-wait DTI coverage.
 

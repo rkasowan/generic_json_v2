@@ -82,7 +82,7 @@ create events through the same genericJsonV2 mapping path without using
 Deploy or update it with:
 
 ```bash
-python3 generic_json_v2/scripts/deploy_jabberwocky_flow_action.py
+python3 scripts/deploy_jabberwocky_flow_action.py
 ```
 
 The deployer publishes the Flow Action
@@ -240,7 +240,7 @@ Statuses that name a terminal skip or relink, in `dti_incident_status` and in th
 | `kept_terminal_incident` | the alert was deliberately left on a finished incident (foreign task, or the preference rules declined) |
 | `existing_after_terminal` / `existing_unlinked` | the open incident was returned without claiming the alert |
 | `skipped_closed_alert` | reconcile left a Closed alert on the incident of the cycle it closed with |
-| `alert_link_changed` | the alert moved to something that is not an incident before the claim landed |
+| `created_unlinked` / `existing_unlinked` | the incident is returned but the alert holds a task we may not replace; `alert_link_status: deferred_to_reconcile_rule` says the same on the fast path |
 
 An alert is only ever written when its link is empty or holds one of our own incidents, and every write is conditional on the exact link that was inspected.
 
@@ -283,7 +283,9 @@ The group on a DTI incident is resolved in this order:
 1. `assignment_group` from the payload
 2. `cmdb_ci.support_group`
 3. `cmdb_ci.u_level_2_support_assignee_group`
-4. nothing — the incident is left unassigned
+4. the alert's own `assignment_group`, where the alert already exists — reported as
+   `assignment_group_source: alert`
+5. nothing — the incident is left unassigned
 
 The CI fields are an ordered list, `CI_SUPPORT_GROUP_FIELDS` in `src/USBEM_Lookups.js`; adding a level 3 tier is one entry. A field that does not exist on the instance is skipped rather than treated as an error, so the same code runs on instances that never got the custom fields. The lookup reports which field matched, for example `cmdb_ci_u_level_2_support_assignee_group`.
 
@@ -315,23 +317,15 @@ On success the transform writes:
 "assignment_group": "<group_sys_id>"
 ```
 
-It also keeps helpful lookup breadcrumbs such as:
-- `assignment_group_name`
-- `assignment_group_lookup_status`
-- `assignment_group_lookup_method`
+`additional_info` on the event carries the resolved sys_ids and the request's own flags, nothing
+else: `cmdb_ci`, `assignment_group`, `cmdb_ci_business_app`, `cmdb_ci_service`,
+`cmdb_ci_service_offering`, plus `direct_to_incident`, `dti_short_description`, `dti_impact`,
+`dti_urgency`, `dti_work_note`, `dti_wait_for_incident` and `usbem_wait_for_alert`.
 
-When `usbem_debug=true`, the connector also restores the richer lookup diagnostics into `additional_info`, including keys such as:
-- `assignment_group_input`
-- `assignment_group_candidate_count`
-- `assignment_group_selection_reason`
-- `assignment_group_candidates`
-- `cmdb_ci_input`
-- `cmdb_ci_candidate_count`
-- `cmdb_ci_selection_reason`
-- `cmdb_ci_candidates`
-- `cmdb_ci_business_app_*`
-- `cmdb_ci_service_*`
-- `cmdb_ci_service_offering_*`
+The lookup diagnostics — what was searched for, which candidates scored, why one won — are not
+written there. With `usbem_debug=true` they go to the companion debug event as attachments
+(`04_lookup_trace.json`, `05_candidate_scores.json`, `06_correlation_hints.json`); see
+[docs/atf_testing.md](docs/atf_testing.md).
 
 ## CI / service / offering helpers
 
@@ -419,22 +413,26 @@ Output:
 
 ### `usbem_wait_for_alert`
 
-Polls the inserted event and related alert state (scope-safe, no `gs.sleep`) and returns alert identifiers.
+Polls the inserted event and the alert it produces, and returns alert identifiers.
 
 ### `dti_wait_for_incident`
 
-Polls the inserted event / alert state (scope-safe, no `gs.sleep`) and:
+Polls the inserted event and alert state, and:
 - returns an existing linked incident if one already exists
 - otherwise creates a new incident if the DTI severity/override rules allow it
 
 For `direct_to_incident=true` without `dti_wait_for_incident=true`, the connector keeps the no-wait fast path. It:
 - reuses the key's open incident or opens a new one, with `dti_mode=fast_async`
 - returns that incident in the response
-- then links the alert to that incident asynchronously after the response returns, with bounded retries
+- claims an alert that already exists during the request, and otherwise leaves the link to the
+  synchronous `after` reconcile rule on `em_alert`
 
 This branch short-circuits before the `usbem_wait_for_alert` handling, so a fast-path call never returns alert identifiers even if that flag is set.
 
-> In scoped apps this build avoids `gs.sleep` and uses record-state polling instead.
+> Waiting costs a REST worker thread for as long as it lasts, so prefer the fast path where you
+> can. Between polls the loop calls `gs.sleep`, which a scoped application is allowed to do on
+> current releases (verified on Zurich); where an instance refuses it, the loop falls back to
+> spinning, which is what every release before 2026.09.28.1 did everywhere.
 
 ## Response shape
 
@@ -454,8 +452,10 @@ Typical response fields:
 - `dti_mode` — `fast_async` or `wait_for_incident`
 - `dti_incident_status` — how the incident was chosen; see the terminal-incident table above
 - `dti_version` — the `USBEM_DTI` version that handled the incident
-- `alert_link_status` — `linked`, `relinked` or `deferred_to_reconcile_rule` when the alert
-  already existed and the fast path attached it during the request
+- `alert_link_status` — `linked`, `relinked`, `already_linked` or `deferred_to_reconcile_rule`
+  when the alert already existed and the fast path attached it during the request
+- `assignment_group_source` — `alert` when the group came from the alert rather than the payload
+  or the CI
 - `incident_fields_applied` / `incident_fields_skipped` — which payload fields were written
 - `incident_netcool_ticket`, `incident_caller_default`, `incident_defaults_skipped` — what the
   connector defaults did
@@ -484,7 +484,9 @@ exits non-zero if anything failed. Groups, selectable with `--only`:
 | `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, opens a new one once it is Resolved/Closed/Canceled, and the alert follows |
 | `wait` | the same cycle with `dti_wait_for_incident=true` |
 | `fields` | NetCool, category, subcategory, caller, impact/urgency, and every payload override |
-| `notes` | the connector note, the created-from line, sender notes on the incident, `alert_work_notes` on the alert, and a plain `work_notes` on a non-DTI alert |
+| `ci` | the assignment group chain against a real CI: the payload group, then `cmdb_ci.support_group`, then the level 2 tier, then the alert's own group |
+| `notes` | the connector note, the created-from line naming the alert, sender notes on the incident (including the legacy `dti_work_note`), `alert_work_notes` on the alert, a plain `work_notes` on a non-DTI alert, and that a note is not re-posted on later alert writes |
+| `edge` | message keys longer than `incident.correlation_id`, concurrent events for one key, and a batch where only one record asks for an incident |
 | `timing` | round-trip milliseconds for each path, reported as an observation |
 
 `--keep` leaves the records in place for inspection, `--json out.json` writes the results, and
@@ -499,14 +501,14 @@ verification. `SN_VERIFY_SSL=false` exists as a last resort.
 
 ## Known gaps
 
-- **The scope cannot update incidents here.** `x_usbna_usb_event` runs with
-  `runtime_access_tracking = enforcing` and, on dev382837, is granted create but not write on
-  `incident`. Creating and returning an incident works; annotating one that already exists (the
-  duplicate work note) and writing `u_generating_alert` after the fact do not. Both report the
-  skip instead of failing the event. Grant the scope write on `incident` where those matter.
-- **`cmdb_rel_ci` read privilege.** Same enforcing scope, no privilege for `cmdb_rel_ci`: any
-  event that resolves to a real CI throws `ScopeAccessNotGrantedException` before the
-  support-group logic runs.
+- **The scope needs its cross-scope privileges.** `x_usbna_usb_event` runs with
+  `runtime_access_tracking = enforcing`, so it needs `incident` read+create+**write** and
+  `cmdb_rel_ci` read. Without the incident write, annotating an incident that already exists (the
+  duplicate work note) and writing `u_generating_alert` after creation are skipped and reported
+  rather than done. Without `cmdb_rel_ci` read, any event resolving to a real CI throws
+  `ScopeAccessNotGrantedException` before the support-group logic runs. Both are granted on
+  dev382837 as of 2026-09-28; the rows usually already exist on `sys_scope_privilege` with status
+  `requested`, so this is a status change, not a new record.
 - **No duplicate protection on the fast path.** Simultaneous events for one key can each open an
   incident. This predates the terminal-incident work.
 - **Message keys longer than `incident.correlation_id`** (100 characters out of box) can only be

@@ -8,11 +8,16 @@
  *   Insert     true
  *   Update     true
  *   Order      150
- *   Condition  !current.message_key.nil() && current.incident.nil() && current.state != 'Closed'
+ *   Condition  (current.additional_info.indexOf('direct_to_incident') > -1 ||
+ *               current.additional_info.indexOf('work_notes') > -1) &&
+ *              (current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)
  *
- * The condition keeps the rule off the vast majority of alert writes: it only runs for an alert
- * that has a message key, has no incident yet, and is not Closed. Everything else is filtered
- * before the script executes.
+ * scripts/deploy_usbem.py holds that condition as BR_CONDITION and writes it with the script, so
+ * the two cannot drift. It keeps the rule off the vast majority of alert writes: it runs only for
+ * an alert whose event asked for an incident or carried a work note, and only while that alert has
+ * no incident or holds a finished one. ('alert_work_notes' contains 'work_notes', so one test
+ * covers both spellings.) The Closed-alert and message-key guards are in the script instead,
+ * because they need to read the alert.
  *
  * Keep this fast. The same guidance says a rule here must not take "more than a few
  * milliseconds", and that an inefficient one "can cause incident creation for an alert to fail
@@ -27,7 +32,7 @@
     // Version stamp, logged with every outcome. The Script Includes report their own versions in
     // the endpoint response; this rule has no response, so the log line is where its version
     // shows up. Keep it in step with the release the rest of the project is on.
-    var BR_VERSION = '2026.09.25.3';
+    var BR_VERSION = '2026.09.28.1';
     var core;
     var dti;
     var outcome;

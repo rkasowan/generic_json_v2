@@ -104,9 +104,10 @@ that alert has no incident or holds a finished one. `alert_work_notes` matches t
 test as a substring, so both spellings are covered. Everything else on `em_alert` is filtered out
 before the script executes.
 
-It attaches the alert link as soon as Event Management creates or updates an alert, and in
-practice usually beats the Script Action to it. Both write through the same conditional claim,
-so whichever runs second reports `already_linked` instead of overwriting.
+It attaches the alert link as soon as Event Management creates or updates an alert. Where the
+alert already existed, the fast path will usually have claimed it during the request instead; both
+write through the same conditional claim, so whichever runs second reports `already_linked`
+instead of overwriting.
 
 **Do not make this async.** Event Management best practices state: "Do not write async business
 rules for alert tables", that a rule here must not take "more than a few milliseconds", and that
@@ -114,9 +115,11 @@ an inefficient one "can cause incident creation for an alert to fail and the ale
 calculation to fail". dev382837 ran it as `async_always` with no condition until 2026-09-25,
 which is exactly the pattern that guidance prohibits.
 
-The condition does the heavy lifting: the rule is skipped entirely for alerts that already have
-an incident, have no message key, or are Closed. When it does run and no open USBEM DTI incident
-exists for the key, the script costs one query and writes nothing.
+The condition does the heavy lifting: the rule is skipped entirely for alerts whose event never
+asked for an incident or carried a work note, and for alerts already holding a live incident. The
+Closed-alert and message-key guards are in the script rather than the condition, because they need
+the alert's state. When the rule does run and no open USBEM DTI incident exists for the key, the
+script costs one query and writes nothing.
 
 ## 6. Properties [verified]
 
@@ -153,20 +156,23 @@ Two warnings:
 Only the level 2 field is in the resolution chain today. To add level 3, append it to
 `CI_SUPPORT_GROUP_FIELDS` in `src/USBEM_Lookups.js`.
 
-## 8. Cross-scope privileges [verified as a gap]
+## 8. Cross-scope privileges [verified]
 
 With `runtime_access_tracking = enforcing`, the scope needs explicit access to the tables it
-touches outside itself. dev382837 grants `cmdb_ci_service` and `service_offering`, and create on
-`incident`, but not the three below. Each one costs a feature, and the connector is written so
+touches outside itself. Each missing privilege costs a feature, and the connector is written so
 that none of them costs an event:
 
 | Table | Access | What is lost without it |
 |---|---|---|
-| `cmdb_rel_ci` | read | any event resolving to a real CI throws `ScopeAccessNotGrantedException` before the assignment-group logic runs, so CI-derived groups never take effect |
-| `incident` | write | the duplicate work note on a reused incident, and `u_generating_alert` written after creation. Both report a skip on the response |
-| `sys_user` | read | nothing today: the default caller is set through the reference field rather than a query, precisely so this privilege is not needed |
+| `incident` | read, create, **write** | without write: the duplicate work note on a reused incident, and `u_generating_alert` written after creation. Both report a skip on the response rather than failing the event |
+| `cmdb_rel_ci` | read | without it, any event resolving to a real CI throws `ScopeAccessNotGrantedException` before the assignment-group logic runs, so CI-derived groups never take effect |
+| `cmdb_ci`, `cmdb_ci_service`, `service_offering`, `sys_user_group` | read | CI, service, offering and group resolution |
+| `sys_user` | read | nothing: the default caller is set through the reference field rather than a query, precisely so this privilege is not needed |
 
-Grant them in **System Applications > Application Cross-Scope Access**.
+Grant them in **System Applications > Application Cross-Scope Access**. ServiceNow usually creates
+the row on `sys_scope_privilege` the first time a call is denied, with status `requested`, so the
+grant is a status change to `allowed` rather than a new record. On dev382837 `incident / write`
+and `cmdb_rel_ci / read` were flipped on 2026-09-28 and both behaviours were verified afterwards.
 
 ## 9. Deploy and verify
 

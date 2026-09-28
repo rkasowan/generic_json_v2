@@ -2,6 +2,31 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.09.28.1 - 2026-09-28
+
+- the alert work note is posted once and never through the business rule's own `current`: the
+  reconcile rule runs on every alert write, so the old code re-posted the same note on writes that
+  never asked for one, and `current.update()` inside an `after` rule on `em_alert` re-entered that
+  same rule. The note now goes through a fresh record with `setWorkflow(false)`, and the key it
+  posted is consumed from the alert's `additional_info`
+- a DTI sender's plain `work_notes` no longer lands on the alert as well as the incident;
+  `alert_work_notes` remains the way to annotate the alert
+- message keys longer than `incident.correlation_id` (100 characters) stop opening a new incident
+  per event. The key is stored, and looked up, as a leading slice plus a short stable hash of the
+  whole key, so it fits the column and still tells distinct keys apart. Keys that already fit are
+  untouched
+- `--env-file` reads the file it was given instead of the nearest `.env` beside it, which could
+  quietly point a deploy at a different instance
+- verification adds `ci` (the assignment group chain against a real CI, including the alert's own
+  group as the last tier) and `edge` (long keys, concurrent events, DTI inside a batch), proves
+  the severity tiers P2/P3/P4 and the 0/5 suppression, proves `u_generating_alert` on both paths,
+  asserts `alert_link_status` rather than printing it, checks the created-from line names the
+  alert, checks the legacy `dti_work_note`, and proves that a DTI request queues no `sysevent`
+- documentation corrected against the code throughout: the `additional_info` breadcrumb and debug
+  keys that nothing writes, the retired async linker and inlined listener build, the business
+  rule's own header condition, the assignment order missing the alert tier, the `alert_link_changed`
+  status that no code returns, and the group list
+
 ## 2026.09.25.3 - 2026-09-25
 
 - every script carries a version and every response reports them: `versions` on the endpoint
@@ -23,7 +48,7 @@ All notable project updates should be recorded here when work is completed and p
   `scripts/usbem_client.py` and `requirements.txt`; the Python tooling now uses `requests` and
   certifi, which fixes the macOS venv `CERTIFICATE_VERIFY_FAILED` failures, and honours
   `SN_CA_BUNDLE` / `SN_VERIFY_SSL`
-- replaced `tests/dti_terminal_incident_check.py` with `tests/verify_usbem_connector.py`: seven
+- replaced `tests/dti_terminal_incident_check.py` with `tests/verify_usbem_connector.py`:
   selectable groups covering version/drift, the original connector contract, both DTI paths,
   field mapping, work notes on both records, and timing
 - the fast path now claims an alert that already exists during the request instead of waiting for

@@ -22,7 +22,7 @@ USBEM_DTI.prototype = {
         this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES = '6,7,8';
         this.PENDING_MAP_POLL_MS = 100;
 
-        this.VERSION = '2026.09.25.3';
+        this.VERSION = '2026.09.28.1';
         this.COMPONENT = 'USBEM_DTI';
 
         // Field mapping inherited from the retired "EM - Generic Endpoint Create Incident"
@@ -41,6 +41,31 @@ USBEM_DTI.prototype = {
     queryNow: function (gr, trace) {
         this.core.bumpMetric(trace, 'query_count', 1);
         gr.query();
+    },
+
+    /**
+     * Wait between polls without burning the worker thread.
+     *
+     * The wait paths used to spin: `while (now < nextPollAt) continue`, on the belief that a
+     * scoped application cannot call gs.sleep. It can, on current releases - verified on
+     * dev382837 (Zurich) - and spinning holds a REST worker at 100% CPU for the whole wait
+     * window, up to usbem_wait_seconds per request. Where an instance does refuse it, this
+     * records that once and the caller falls back to the old spin, so behaviour is unchanged
+     * there.
+     *
+     * Returns true when it actually paused.
+     */
+    pausePolling: function (ms) {
+        if (this.sleepUnavailable === true) {
+            return false;
+        }
+        try {
+            gs.sleep(ms);
+            return true;
+        } catch (eSleep) {
+            this.sleepUnavailable = true;
+            return false;
+        }
     },
 
     getStringProperty: function (name, defaultValue, trace) {
@@ -127,15 +152,23 @@ USBEM_DTI.prototype = {
     },
 
     /**
-     * The message key as incident.correlation_id actually stores it.
-     * Keys may be up to 1024 characters but correlation_id is shorter (100 out of box)
-     * and the platform truncates on write. Used only to let shouldPreferFastIncident move
-     * a long key's own alert off a terminal incident. It is deliberately NOT used for the
-     * correlation lookup: distinct keys sharing the first 100 characters would merge.
+     * The message key as incident.correlation_id stores it, for both writes and lookups.
+     *
+     * em_alert.message_key holds 1024 characters but incident.correlation_id holds 100 out of
+     * box, and the platform truncates silently on write. Writing the raw key and then querying
+     * for the raw key therefore never matches for a long key, and every event opened another
+     * incident. Plain truncation is not the answer either: two keys sharing their first 100
+     * characters would collapse onto one incident.
+     *
+     * So a key that does not fit is stored as its own leading characters plus a short hash of
+     * the whole key, which fits the column, is stable across nodes and requests, and stays
+     * distinct for keys that differ anywhere. Keys that already fit are untouched, which is
+     * every key under 100 characters and therefore essentially all real traffic.
      */
     getCorrelationKey: function (messageKey) {
         var gr;
         var len;
+        var suffix;
         var key = this.core.hasValue(messageKey) ? String(messageKey) : '';
 
         if (typeof this.correlationKeyLength !== 'number') {
@@ -152,9 +185,26 @@ USBEM_DTI.prototype = {
             }
         }
         if (this.correlationKeyLength > 0 && key.length > this.correlationKeyLength) {
-            return key.substring(0, this.correlationKeyLength);
+            suffix = '~' + this.hashKey(key);
+            return key.substring(0, this.correlationKeyLength - suffix.length) + suffix;
         }
         return key;
+    },
+
+    /**
+     * Small stable hash of a string, base 36. FNV-1a over 32 bits, kept unsigned with >>> 0.
+     * Only ever used to keep long correlation keys distinct, never for anything security
+     * related.
+     */
+    hashKey: function (text) {
+        var value = 0x811c9dc5;
+        var i;
+        var input = String(text || '');
+        for (i = 0; i < input.length; i++) {
+            value ^= input.charCodeAt(i);
+            value = (value + ((value << 1) + (value << 4) + (value << 7) + (value << 8) + (value << 24))) >>> 0;
+        }
+        return value.toString(36);
     },
 
     /**
@@ -340,7 +390,10 @@ USBEM_DTI.prototype = {
                 break;
             }
             if (now < nextPollAt) {
-                continue;
+                if (!this.pausePolling(this.core.WAIT_ALERT_POLL_MS)) {
+                    continue;
+                }
+                now = new Date().getTime();
             }
             nextPollAt = now + this.core.WAIT_ALERT_POLL_MS;
 
@@ -453,7 +506,10 @@ USBEM_DTI.prototype = {
                 break;
             }
             if (now < nextPollAt) {
-                continue;
+                if (!this.pausePolling(this.core.WAIT_ALERT_POLL_MS)) {
+                    continue;
+                }
+                now = new Date().getTime();
             }
             nextPollAt = now + this.core.WAIT_ALERT_POLL_MS;
 
@@ -494,15 +550,26 @@ USBEM_DTI.prototype = {
     },
 
     /**
-     * Post a sender-supplied work note onto the alert.
+     * Post a sender-supplied work note onto the alert, once.
+     *
      * The alert does not exist while the request is being served, so the note travels in the
      * event's additional_info and is written when the alert is first handled. "alert_work_notes"
-     * always targets the alert; a plain "work_notes" targets the alert only when there is no
-     * incident to put it on, so a non-DTI sender can still annotate their alert.
+     * always targets the alert. A plain "work_notes" targets the alert only when the sender did
+     * not ask for an incident - for a DTI event that note is the incident's, and
+     * createIncidentRecord has already written it there.
+     *
+     * Two things matter about how the write is made. It runs inside the synchronous after rule on
+     * em_alert, so it must not write through that rule's own `current`: it uses a fresh record
+     * with business rules suppressed, or the update re-enters this very rule. And it consumes the
+     * key it just posted, because otherwise every later write to the alert - every repeat event,
+     * every severity change - would find the same key still sitting in additional_info and append
+     * the same note again.
      */
     applyAlertWorkNote: function (alertGr, hasIncident) {
         var info;
-        var note;
+        var note = '';
+        var consumedKey = '';
+        var writeGr;
 
         if (!alertGr || !alertGr.isValidField('work_notes') || !alertGr.isValidField('additional_info')) {
             return false;
@@ -511,15 +578,31 @@ USBEM_DTI.prototype = {
         if (!this.core.isObject(info)) {
             return false;
         }
-        note = this.core.hasValue(info.alert_work_notes) ? info.alert_work_notes :
-            (!hasIncident && this.core.hasValue(info.work_notes) ? info.work_notes : '');
+
+        if (this.core.hasValue(info.alert_work_notes)) {
+            note = info.alert_work_notes;
+            consumedKey = 'alert_work_notes';
+        } else if (!this.core.parseBoolean(info.direct_to_incident, false) && !hasIncident &&
+            this.core.hasValue(info.work_notes)) {
+            note = info.work_notes;
+            consumedKey = 'work_notes';
+        }
         if (!this.core.hasValue(note)) {
             return false;
         }
+
+        writeGr = new GlideRecord('em_alert');
+        if (!writeGr.get(alertGr.getUniqueValue())) {
+            return false;
+        }
+        delete info[consumedKey];
+        writeGr.setValue('additional_info', this.core.safeJSONStringify(info));
         // work_notes is a journal_input: setValue() is silently dropped, dot assignment is what
-        // actually registers the entry.
-        alertGr.work_notes = String(note);
-        alertGr.update();
+        // actually registers the entry. Journal entries are written by the platform, not by a
+        // business rule, so suppressing rules on this update does not lose the note.
+        writeGr.work_notes = String(note);
+        writeGr.setWorkflow(false);
+        writeGr.update();
         return true;
     },
 
@@ -528,7 +611,7 @@ USBEM_DTI.prototype = {
             return;
         }
         if (incGr.isValidField('correlation_id')) {
-            incGr.setValue('correlation_id', ctx.mapped.message_key);
+            incGr.setValue('correlation_id', this.getCorrelationKey(ctx.mapped.message_key));
         }
         if (incGr.isValidField('correlation_display')) {
             incGr.setValue('correlation_display', 'USBEM DTI');
@@ -641,18 +724,12 @@ USBEM_DTI.prototype = {
         if (currentIncident.isValidField('correlation_id')) {
             currentCorrelation = currentIncident.getValue('correlation_id') || '';
         }
-        if (preferredCorrelation !== payload.message_key || currentCorrelation !== payload.message_key) {
-            // Keys longer than correlation_id are stored truncated, so they never match
-            // exactly. For those, allow only the terminal-replacement rule: the caller is
-            // deciding for this key's own alert, so moving it off a finished incident onto
-            // a live one of the same stored key cannot merge distinct keys. The age and
-            // creator rules below still require an exact match, as before this change.
-            correlationKey = this.getCorrelationKey(payload.message_key);
-            if (correlationKey === String(payload.message_key) ||
-                preferredCorrelation !== correlationKey || currentCorrelation !== correlationKey) {
-                return false;
-            }
-            return this.isIncidentReusable(preferredIncident) && !this.isIncidentReusable(currentIncident);
+        // Both incidents must carry this key in the form correlation_id stores it. Long keys
+        // now round-trip through getCorrelationKey, so this is an exact comparison for every
+        // key length and no incident belonging to another key can be considered here.
+        correlationKey = this.getCorrelationKey(payload.message_key);
+        if (preferredCorrelation !== correlationKey || currentCorrelation !== correlationKey) {
+            return false;
         }
 
         if (!this.isIncidentReusable(preferredIncident)) {
@@ -756,7 +833,13 @@ USBEM_DTI.prototype = {
             if (!this.core.hasValue(value) || this.core.isObject(value) || this.core.isArray(value)) {
                 continue;
             }
-            if (this.RESERVED_INCIDENT_FIELDS.indexOf(field) >= 0 || !incGr.isValidField(field)) {
+            if (this.RESERVED_INCIDENT_FIELDS.indexOf(field) >= 0) {
+                continue;
+            }
+            if (!incGr.isValidField(field)) {
+                // Report it rather than guess: a sender who misspells a field name should see
+                // that in the response, not wonder why the value vanished.
+                skipped.push(field);
                 continue;
             }
             try {
@@ -1237,7 +1320,9 @@ USBEM_DTI.prototype = {
         if (!gr.isValidField('correlation_id')) {
             return null;
         }
-        gr.addQuery('correlation_id', messageKey);
+        // The stored form, not the raw key: a key longer than the column is stored as a prefix
+        // plus a hash, and querying the raw key would never match what was written.
+        gr.addQuery('correlation_id', this.getCorrelationKey(messageKey));
         // Terminal states are excluded in the query rather than after the fact, so the
         // result set stays small as a key cycles through incident after incident.
         terminalStates = this.getTerminalIncidentStates(trace);
@@ -1356,7 +1441,10 @@ USBEM_DTI.prototype = {
                 break;
             }
             if (now < nextPollAt) {
-                continue;
+                if (!this.pausePolling(this.PENDING_MAP_POLL_MS)) {
+                    continue;
+                }
+                now = new Date().getTime();
             }
             nextPollAt = now + this.PENDING_MAP_POLL_MS;
             rowGr = new GlideRecord(tableName);

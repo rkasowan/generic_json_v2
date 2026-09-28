@@ -18,7 +18,7 @@ USBEM_Core.prototype = {
 
         // Release stamp. Every USBEM script carries one and the listener reports all of
         // them, so a stale copy on an instance shows up in the response body.
-        this.VERSION = '2026.09.25.3';
+        this.VERSION = '2026.09.28.1';
         this.COMPONENT = 'USBEM_Core';
         this.DEFAULT_SOURCE = 'GenericJSON';
         this.DEFAULT_DESCRIPTION = 'Generic JSON event';

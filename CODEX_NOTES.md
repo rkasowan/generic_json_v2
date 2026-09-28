@@ -22,6 +22,20 @@ access public. The listener and the rule are global.
 attachments: the whitepaper, the customer KB, the incident `sys_dictionary` dump, and the PNG of
 the retired `EM - Generic Endpoint Create Incident` subflow.
 
+## Release 2026.09.28.1 (2026-09-28)
+
+- alert work notes: posted once, through a fresh record with `setWorkflow(false)`, and the key is
+  consumed from the alert's `additional_info`. The old code wrote through the business rule's own
+  `current` and re-posted on every later alert write
+- a DTI sender's plain `work_notes` goes to the incident only; `alert_work_notes` is the alert's
+- long message keys: `correlation_id` now stores (and is queried by) a leading slice plus a stable
+  FNV hash of the whole key, so keys over 100 characters stop opening an incident per event
+- wait loops call `gs.sleep` between polls instead of spinning; scoped apps are allowed to sleep on
+  Zurich (verified), and the spin is kept only as a fallback
+- unknown payload field names come back in `incident_fields_skipped` instead of vanishing
+- `--env-file` reads the named file, not the nearest `.env` beside it
+- verification groups are now deploy / compat / fast / wait / fields / ci / notes / edge / timing
+
 ## Release 2026.09.25.3 (2026-09-25)
 
 - every script stamps the release and the endpoint returns `versions` for listener + 4 includes;
@@ -36,19 +50,26 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 
 ## Gotchas proven on this PDI
 
-- **Scope fencing.** `x_usbna_usb_event` can create incidents but **not update** them; `sys_user`
-  and `cmdb_rel_ci` reads are denied. An uncaught fencing exception returns HTTP 500 and loses the
-  event, so every cross-scope call in the DTI path is wrapped and reports a skip. The default
-  caller is set with `getElement('caller_id').setDisplayValue(...)` precisely to avoid a
-  `sys_user` query.
+- **Scope fencing.** `x_usbna_usb_event` needs `incident` read+create+write and `cmdb_rel_ci`
+  read; both were `requested` until 2026-09-28, when they were flipped to `allowed` (the user
+  confirmed prod gives the scope full CRU). `sys_user` read is still denied and not needed — the
+  default caller is set with `getElement('caller_id').setDisplayValue(...)` precisely to avoid
+  that query. An uncaught fencing exception returns HTTP 500 and loses the event, so every
+  cross-scope call in the DTI path stays wrapped and reports a skip.
 - **Journal fields.** `work_notes` on both `incident` and `em_alert` only accept dot assignment;
   `setValue()` is silently dropped.
-- **`u_netcool_ticket`** exists on the PDI incident table; **`u_generating_alert` does not**, so
-  that mapping is code-complete but unverified here. It is in the customer dictionary dump.
+- **`u_netcool_ticket`** and **`u_generating_alert`** (reference → `em_alert`, added by the user
+  on 2026-09-28) both exist on the PDI incident table and are verified on the wait path and the
+  fast path.
 - **Choice values.** The PDI has no `Monitoring Alert` subcategory choice, so `setChoiceLike`
   falls back to writing the literal, which is what the subflow did.
 - **`sys.scripts.do` echoes the script source** above its output, so a marker-based background
   script runner must try every marker occurrence, not the first.
+- **`gs.sleep` works in the scoped app** on Zurich (verified 2026-09-28), so wait loops do not need
+  to spin. The old comments claiming otherwise were wrong.
+- **Event Management refreshes `em_alert.additional_info` from each new event**, so a key removed
+  from it comes back when the next event carries it. That is why the alert work note is posted per
+  event that asks for one, and not again on writes that do not.
 - **Wait mode** gives up after `usbem_wait_seconds` (15 default) with
   `dti_incident_status=alert_not_found`. A degraded PDI needs more; the verifier asks for 45.
 - Endpoint round trips while the PDI was degraded, 2026-09-25: plain ~3.7 s, fast ~6–8 s, wait
@@ -60,7 +81,7 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python3 scripts/deploy_usbem.py          # deploy + read live versions back
-python3 tests/verify_usbem_connector.py  # 7 groups, self-cleaning
+python3 tests/verify_usbem_connector.py  # 9 groups, self-cleaning
 ```
 
 Last full run 2026-09-25: all groups pass; the duplicate work note reports
