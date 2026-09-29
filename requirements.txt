@@ -1,8 +1,12 @@
-# Everything the Python tooling in this repo needs.
-#   python3 -m venv .venv && source .venv/bin/activate
-#   pip install -r requirements.txt
+# Nothing here is required.
 #
-# requests is used instead of urllib because it ships with a working CA bundle on macOS,
-# which is what causes "CERTIFICATE_VERIFY_FAILED" in a plain venv there.
+# tests/usbem_verify.py and scripts/deploy_usbem.py run on a stock Python 3.9+ with the standard
+# library alone — verified on macOS system Python with neither package installed.
+#
+# Install these only if you hit CERTIFICATE_VERIFY_FAILED: requests brings its own CA bundle and
+# both scripts will use it automatically if it is there. The alternatives are --ca-bundle for a
+# corporate root, or --insecure.
+#
+#   pip install -r requirements.txt
 requests>=2.32.3
 certifi>=2024.7.4

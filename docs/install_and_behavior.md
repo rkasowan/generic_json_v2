@@ -10,7 +10,7 @@ The repo now also includes the live modular `genericJsonV2` PDI layout:
 - `servicenow/USBEM_genericJsonV2.listener.js`
 - `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js`
 
-Install it with `scripts/deploy_usbem.py` and verify it with `tests/verify_usbem_connector.py`;
+Install it with `scripts/deploy_usbem.py` and verify it with `tests/usbem_verify.py`;
 [install_from_scratch.md](install_from_scratch.md) is the full walkthrough.
 
 For environment testing, the repo also includes:

@@ -176,12 +176,7 @@ and `cmdb_rel_ci / read` were flipped on 2026-09-28 and both behaviours were ver
 
 ## 9. Deploy and verify
 
-Both scripts need Python 3.9+ and the packages in `requirements.txt`:
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
+Both scripts are standard-library Python 3.9+; there is nothing to install.
 
 Push the repo at the instance and read back what it is running:
 
@@ -193,7 +188,7 @@ python3 scripts/deploy_usbem.py             # write it, then report live version
 Then verify behaviour end to end:
 
 ```bash
-python3 tests/verify_usbem_connector.py
+python3 tests/usbem_verify.py
 ```
 
 Self-cleaning, exit code 0 when everything passed. `--only deploy` is the fastest confidence

@@ -99,9 +99,7 @@ value stops taking effect — intended: an incident with no resolvable group is 
 ## 6. Verify after transfer
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python3 tests/verify_usbem_connector.py
+python3 tests/usbem_verify.py
 ```
 
 Self-cleaning, exit code 0 when everything passed. `--only deploy` alone confirms that every

@@ -40,8 +40,6 @@ properties, the CI support tier fields, the cross-scope privileges and verificat
 repo at an instance and read back what it is running:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
 python3 scripts/deploy_usbem.py
 ``` Moving this work between existing instances: [docs/dti_transfer_package.md](docs/dti_transfer_package.md).
 
@@ -468,18 +466,17 @@ Typical response fields:
 ## Testing
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python3 tests/verify_usbem_connector.py
+python3 tests/usbem_verify.py
 ```
 
-[tests/verify_usbem_connector.py](tests/verify_usbem_connector.py) drives the live endpoint the
+[tests/usbem_verify.py](tests/usbem_verify.py) is a single file with no dependencies — copy it
+anywhere and run it on a stock Python 3.9+. It drives the live endpoint the
 way a sender does, tags everything it creates with a unique prefix, deletes it afterwards, and
 exits non-zero if anything failed. Groups, selectable with `--only`:
 
 | Group | What it proves |
 |---|---|
-| `deploy` | the endpoint reports this release's version for every component, and each instance record still matches the file in this repo |
+| `deploy` | the endpoint reports this release's version for every component, the reconcile rule is a filtered synchronous `after` rule, and nothing queues an event or runs on a schedule |
 | `compat` | the original contract holds: plain events, `records` batches, no incident without DTI, and the legacy `dti_short_description` / `dti_work_note` names |
 | `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, opens a new one once it is Resolved/Closed/Canceled, and the alert follows |
 | `wait` | the same cycle with `dti_wait_for_incident=true` |
@@ -493,11 +490,19 @@ exits non-zero if anything failed. Groups, selectable with `--only`:
 `--prefix` sets the tag. It needs an admin account: resolving and closing incidents goes through a
 background script, because the Table API trips over the mandatory close fields.
 
-**Python on macOS.** Use the venv and `requirements.txt` above. The scripts talk to ServiceNow
-through `requests`, which carries its own CA bundle; the stdlib `urllib` in a fresh macOS venv has
-no usable one and fails valid certificates with `CERTIFICATE_VERIFY_FAILED`. If your network
-terminates TLS with a corporate root, point `SN_CA_BUNDLE` at that root instead of disabling
-verification. `SN_VERIFY_SSL=false` exists as a last resort.
+Credentials come from `--instance/--user/--password`, from the environment
+(`servicenow_instance` / `servicenow_user` / `servicenow_password`), or from a `.env` — the one
+named by `--env-file`, or the nearest one at or above the working directory.
+
+**TLS.** Certificates are verified. Both scripts use `requests` when it is installed, because it
+carries its own CA bundle, and the standard library otherwise; the standalone run was verified on
+macOS system Python 3.9 with neither `requests` nor `certifi` present. If you do hit
+`CERTIFICATE_VERIFY_FAILED`: `pip install certifi`, or `--ca-bundle /path/root.pem` for a
+corporate root, or `--insecure` as a last resort.
+
+To check the instance against this checkout rather than only its self-reported version, run
+`python3 scripts/deploy_usbem.py --dry-run` — it prints any record whose script differs from the
+repo.
 
 ## Known gaps
 
@@ -528,9 +533,9 @@ Runtime:
 
 Tooling:
 
-- `requirements.txt`, `scripts/usbem_client.py`
 - `scripts/deploy_usbem.py` — push the repo to an instance and read back its versions
-- `tests/verify_usbem_connector.py` — live end-to-end verification
+- `tests/usbem_verify.py` — live end-to-end verification, one self-contained file
+- `requirements.txt` — nothing required; `requests`/`certifi` only if TLS needs them
 
 Docs:
 

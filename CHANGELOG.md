@@ -26,6 +26,14 @@ All notable project updates should be recorded here when work is completed and p
   keys that nothing writes, the retired async linker and inlined listener build, the business
   rule's own header condition, the assignment order missing the alert tier, the `alert_link_changed`
   status that no code returns, and the group list
+- the verification suite is one self-contained file, `tests/usbem_verify.py`: no sibling module, no
+  virtualenv, no requirements, no particular directory. Copy it anywhere and run it on a stock
+  Python 3.9+ — verified on macOS system Python with neither `requests` nor `certifi` installed.
+  `scripts/deploy_usbem.py` is standalone on the same terms (it still needs the checkout, because
+  the checkout is what it deploys). `scripts/usbem_client.py` and
+  `tests/verify_usbem_connector.py` are gone; credentials and TLS are now command-line options
+  (`--instance/--user/--password`, `--env-file`, `--ca-bundle`, `--insecure`) rather than
+  environment conventions
 
 ## 2026.09.25.3 - 2026-09-25
 

@@ -46,7 +46,7 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
   duplicate note on reuse. Payload fields override all of it
 - the fast path now claims an already-existing alert during the request
   (`claimAlertForFastIncident`), so a terminal-state relink no longer waits for the rule to fire
-- `scripts/deploy_usbem.py` + `tests/verify_usbem_connector.py` + `requirements.txt`
+- `scripts/deploy_usbem.py` + `tests/usbem_verify.py`, both standard-library only
 
 ## Gotchas proven on this PDI
 
@@ -78,10 +78,8 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 ## Verification
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python3 scripts/deploy_usbem.py          # deploy + read live versions back
-python3 tests/verify_usbem_connector.py  # 9 groups, self-cleaning
+python3 scripts/deploy_usbem.py   # deploy + read live versions back
+python3 tests/usbem_verify.py     # 9 groups, self-cleaning, one file, no dependencies
 ```
 
 Last full run 2026-09-25: all groups pass; the duplicate work note reports
