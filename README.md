@@ -485,35 +485,35 @@ no-incident behavior without DTI, and `records` batching. It does not require th
 component `versions` block or DTI result fields. The default modern compatibility group also
 checks the old `dti_short_description` and `dti_work_note` aliases against the current listener.
 
-With no `--instance`, the verifier prompts for one of the four production instances. Set up the
-shared OAuth file once:
+With no `--instance`, the verifier prompts for one of the four production instances. Set up its
+single config file once:
 
 ```bash
-cp tests/instances/production-oauth.env.example tests/instances/production-oauth.env
+cp tests/usbem_verify.env.example tests/usbem_verify.env
 ```
 
-Fill the client ID/secret pairs for the instances you intend to test in
-`tests/instances/production-oauth.env`; only the selected instance's pair is required for a run.
-The verifier reads only that pair. The filled-in file is ignored by Git.
-For caller, assignee, and lookup fixtures, optionally copy the selected instance's
-`tests/instances/<name>.env.example` to `tests/instances/<name>.env`; those filled-in files are
-also ignored. Existing per-instance OAuth entries remain supported and override the shared file.
+`tests/usbem_verify.env` contains all four instance URLs and OAuth credential slots, common CI and
+group fixtures, and per-instance caller/assignee values. The URLs are prefilled. Fill credentials
+for the instances you intend to test; each run uses only the selected instance's URL and OAuth
+pair. Add shared CIs, assignment groups, and other lookup fixtures once. For name mapping, fill the
+shared last name and the selected instance's first name; the verifier joins them. Caller sys_ids
+and each instance's `default_caller_sys_id` are separate values. Assignee fixtures are optional so
+the instance's on-call schedule can populate `assigned_to` when no assignee is sent. Blank fixture
+values make only the related checks report as skipped. The filled-in config is ignored by Git.
+The `synthetic/generic-json-v2-dti-synthetic.env.example` file is for the separate synthetic load
+tool and is not needed by this verifier.
+
 The OAuth application's user must have the production API permissions in use here:
 the limited profile submits events through the connector (`em_event` write), reads and updates
 Incident, and reads/creates/updates Alert. It defaults on for the four production profiles, skips cleanup, never invokes Scripts -
 Background, and retains tagged test records. It does not query `sys_user` or `sys_journal_field`:
 the `notes` group prints Incident/Alert numbers and prompts for manual confirmation in a terminal.
 
-Fill each selected instance's `tests/instances/<name>.env` when its fixtures are needed. Each has
-separate caller fixtures for that instance's anonymized first name. For a custom
-target such as a PDI, Basic credentials still come from `--user` / `--password` or `--env-file`; its
-fixture sidecar is `tests/usbem_verify.fixtures.env` (copy
-`tests/usbem_verify.fixtures.example.env`). `USBEM_FIXTURE_*` environment variables override file
-values. Blank fixture keys report as skipped. `USBEM_FIXTURE_CI_IDENTIFIER` is a JSON object.
-Caller and assignee fixture values may be sys_ids or exact full names; a caller's first name may
-differ across instances. Set the expected sys_id alongside a full name when possible; the verifier
-can then compare the stored Incident reference without needing an API display value. Category and
-subcategory defaults and overrides are tested automatically.
+For a custom target such as a PDI, pass its URL with `--instance` and use `--user` / `--password`
+or `--env-file` for credentials. The unified config file still supplies common fixture values.
+Caller and assignee fields accept sys_ids or exact full names. The verifier validates references
+through Incident readback without querying `sys_user`. Category and subcategory defaults and
+overrides are tested automatically.
 
 To test the original connector response contract, point `--source` at that listener and select
 legacy mode. The old payload matrix still runs:
@@ -544,13 +544,11 @@ returns a non-zero exit code. Groups, selectable with `--only`:
 skipped when the caller cannot change the incident state. No admin background-script access is
 used.
 
-Production OAuth credentials come from the ignored shared
-`tests/instances/production-oauth.env`, selected by the instance-specific variable prefix, such as
-`USBEM_ITSMNOWDEVWORKER_OAUTH_CLIENT_SECRET`. The verifier also accepts credentials in the
-selected `tests/instances/<name>.env` or as environment overrides with that prefix. Custom-target
-credentials use `--instance` for the custom target and come from `--user/--password`, the
-environment (`servicenow_user` / `servicenow_password`), or a `.env` — the one named by
-`--env-file`, or the nearest one at or above the working directory.
+Production URLs and OAuth credentials come from the ignored `tests/usbem_verify.env`, using
+instance-specific keys such as `USBEM_ITSMNOWDEVWORKER_URL` and
+`USBEM_ITSMNOWDEVWORKER_OAUTH_CLIENT_SECRET`. Environment variables with the same names override
+the file. Custom-target credentials use `--user` / `--password` or a config file passed with
+`--env-file`.
 
 **TLS.** Certificates are verified. The verifier uses macOS `/usr/bin/curl` when it is built
 with Apple SecureTransport, so venv runs trust the local macOS Keychain roots. On other systems

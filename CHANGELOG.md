@@ -13,11 +13,9 @@ All notable project updates should be recorded here when work is completed and p
 - production verification prompts for exactly one of the four worker instances and loads only its
   ignored OAuth/fixture env file; production profiles default to the `em_event` write + Incident
   RW + Alert RWC path and retain created records
-- added separate blank config examples for `itsmnowDEVworker`, `itsmnowITworker`,
-  `itsmnowUATworker`, and `itsmnowworker`; the Mac verifier continues to use system curl's
-  SecureTransport/Keychain trust roots
-- added one ignored shared OAuth env file template with a distinct client ID/secret pair for each
-  production instance; the verifier selects credentials for only the chosen instance
+- consolidated all four production URLs and OAuth pairs, shared lookup fixtures, and per-instance
+  caller/assignee IDs and names into `tests/usbem_verify.env.example`; its filled copy is ignored
+- the Mac verifier continues to use system curl's SecureTransport/Keychain trust roots
 
 ## 2026.09.28.1 - 2026-09-28
 

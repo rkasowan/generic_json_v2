@@ -27,10 +27,10 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 - sender `caller_id` / `assigned_to` accept sys_ids or exact full names. The Script Include resolves
   names via scoped `sys_user` read; missing/ambiguous caller uses the per-instance
   `x_usbna_usb_event.default_caller_sys_id`, while unresolved `assigned_to` stays blank for on-call.
-- production verifier menu uses exactly itsmnowDEVworker, itsmnowITworker, itsmnowUATworker, and
-  itsmnowworker. OAuth pairs can be filled in `tests/instances/production-oauth.env`; the verifier
-  reads only the selected instance's pair. Per-instance ignored files hold optional fixtures.
-  Templates are tracked and filled files ignored. OAuth secrets stay local.
+- production verifier uses one ignored `tests/usbem_verify.env` for all four instance URLs and
+  OAuth pairs, shared lookup fixtures, and per-instance caller/assignee IDs and first names. The
+  tracked `tests/usbem_verify.env.example` is the only verifier config template; filled secrets
+  stay local.
 - production verifier defaults to em_event W + Incident RW + Alert RWC, submits events via the
   connector, retains records, and reads mapped users only from Incident. It never queries
   `sys_user` or `sys_journal_field` through the API.
@@ -53,14 +53,13 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
   lookups / manually confirmed notes / edge / timing. `--access-profile limited` uses Incident RW
   and Alert RWC, retains tagged records, and never queries `sys_journal_field` or runs Scripts -
   Background. Work-note checks print Incident/Alert numbers and prompt for manual y/n confirmation.
-- the verifier loads per-instance CI, CI identifier, group, service, offering, CAR ID, and caller
-  fixtures from ignored `tests/usbem_verify.fixtures.env`; the tracked
-  `tests/usbem_verify.fixtures.example.env` is its blank template. Alternate instance files use
-  `--fixture-file`. Blank fixtures report as skipped. Field checks verify default
-  Software/Monitoring Alert and Hardware/Server overrides plus caller_id and assigned_to by sys_id
-  or exact full name (whose first name may vary across anonymized lower instances). This release
-  adds exact `sys_user` lookup inside the Script Include; the API verifier still checks only the
-  resulting Incident reference.
+- at that release, the verifier loaded per-instance CI, CI identifier, group, service, offering,
+  CAR ID, and caller fixtures from separate ignored env files. These settings are now consolidated
+  into the single `tests/usbem_verify.env` described above. Blank fixtures report as skipped. Field
+  checks verify default Software/Monitoring Alert and Hardware/Server overrides plus caller_id and
+  assigned_to by sys_id or exact full name (whose first name may vary across anonymized lower
+  instances). This release adds exact `sys_user` lookup inside the Script Include; the API verifier
+  still checks only the resulting Incident reference.
   `--source firstGenericJson --contract legacy` selects the original listener's response envelope
   while still running the legacy payload matrix.
 

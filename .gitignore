@@ -5,5 +5,7 @@ __pycache__/
 *.log
 .venv/
 venv/
+# Current single verifier config, plus legacy local config paths retained for secret safety.
 tests/usbem_verify.fixtures.env
+tests/usbem_verify.env
 tests/instances/*.env

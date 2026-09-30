@@ -5,11 +5,11 @@ Tests the inbound event API and nothing else. It writes only uniquely tagged eve
 and incidents. Standard profile attempts cleanup; limited production profile retains its records
 because the caller may not have delete access. It does not modify CMDB records or configuration.
 
-The script uses Python's standard library. The production menu expects config files under
-`tests/instances/`; a custom target can use `--instance` and the usual `.env` credentials. On
-macOS, it uses `/usr/bin/curl` with Apple SecureTransport when available so a venv honors local
-Keychain trust roots;
-elsewhere it uses `requests` when installed and otherwise Python's verified TLS defaults.
+The script uses Python's standard library. Production URLs, OAuth credentials, and fixture values
+come from one ignored `tests/usbem_verify.env` file. A custom target can use `--instance` and
+`--user` / `--password`. On macOS, it uses `/usr/bin/curl` with Apple SecureTransport when
+available so a venv honors local Keychain trust roots; elsewhere it uses `requests` when installed
+and otherwise Python's verified TLS defaults.
 
     python3 usbem_verify.py --instance https://xxx.service-now.com --user admin --password '...'
     python3 usbem_verify.py --only fast --only notes
@@ -18,10 +18,9 @@ elsewhere it uses `requests` when installed and otherwise Python's verified TLS 
     python3 usbem_verify.py --keep                # leave the records it creates
     python3 usbem_verify.py --json out.json       # machine-readable results
 
-With no --instance, the verifier prompts you to choose one of the four production instances.
-OAuth credentials can be kept in tests/instances/production-oauth.env; the verifier reads only
-the selected instance's values. Optional fixture values can go in that instance's ignored
-tests/instances/<name>.env file. Use --instance for a one-off target such as a PDI.
+With no --instance, the verifier prompts you to choose one of the four production instances and
+uses that instance's URL and OAuth credentials from `tests/usbem_verify.env`. Shared fixture
+values and that instance's caller/assignee fixtures come from the same file.
 
 Terminal incident transitions use only the caller's Incident API access. If an ACL blocks a
 transition, that state case is reported as skipped; the verifier never uses Scripts - Background.
@@ -34,9 +33,8 @@ Use --source to select a different push connector. For the original PDI listener
 same command with their original listener source value. The default source is `genericJsonV2`.
 
 For restricted production users, `--access-profile limited` submits events through the connector
-and verifies through Incident/Alert readback. Fixture values load from `usbem_verify.fixtures.env` beside
-this script, or from `--fixture-file`; blank values make only their fixture-driven checks report as
-skipped. The notes group prints record numbers and prompts for manual checks without querying
+and verifies through Incident/Alert readback. Fixture values load from `tests/usbem_verify.env`;
+blank values make only their fixture-driven checks report as skipped. The notes group prints record numbers and prompts for manual checks without querying
 `sys_journal_field`. The profile avoids Scripts - Background and deletion, and retains created records.
 
 GROUPS (--only <name>, repeatable):
@@ -82,12 +80,8 @@ EXPECTED_RELEASE = "2026.09.30.1"      # what the live endpoint should report; -
 TERMINAL_STATES = (("6", "Resolved"), ("7", "Closed"), ("8", "Canceled"))
 GROUPS = ("compat", "payload_contract", "fast", "fields", "lookups", "notes", "edge", "timing")
 DEFAULT_SOURCE = "genericJsonV2"
-PRODUCTION_INSTANCES = (
-    ("itsmnowDEVworker", "https://itsmnowDEVworker.service-now.com"),
-    ("itsmnowITworker", "https://itsmnowITworker.service-now.com"),
-    ("itsmnowUATworker", "https://itsmnowUATworker.service-now.com"),
-    ("itsmnowworker", "https://itsmnowworker.service-now.com"),
-)
+PRODUCTION_INSTANCES = ("itsmnowDEVworker", "itsmnowITworker",
+                        "itsmnowUATworker", "itsmnowworker")
 
 # Fixture values are kept outside this script so script updates preserve per-instance setup.
 FIXTURE_ENV_KEYS = {
@@ -102,8 +96,12 @@ FIXTURE_ENV_KEYS = {
     "business_app_car_id": "USBEM_FIXTURE_BUSINESS_APP_CAR_ID",
     "caller_sys_id": "USBEM_FIXTURE_CALLER_SYS_ID",
     "caller_full_name": "USBEM_FIXTURE_CALLER_FULL_NAME",
+    "caller_first_name": "USBEM_FIXTURE_CALLER_FIRST_NAME",
+    "caller_last_name": "USBEM_FIXTURE_CALLER_LAST_NAME",
     "assigned_to_sys_id": "USBEM_FIXTURE_ASSIGNED_TO_SYS_ID",
     "assigned_to_full_name": "USBEM_FIXTURE_ASSIGNED_TO_FULL_NAME",
+    "assigned_to_first_name": "USBEM_FIXTURE_ASSIGNED_TO_FIRST_NAME",
+    "assigned_to_last_name": "USBEM_FIXTURE_ASSIGNED_TO_LAST_NAME",
     "default_caller_sys_id": "USBEM_FIXTURE_DEFAULT_CALLER_SYS_ID",
     "ambiguous_caller_full_name": "USBEM_FIXTURE_AMBIGUOUS_CALLER_FULL_NAME",
 }
@@ -133,19 +131,20 @@ def parse_env_file(path: Path) -> dict:
     return values
 
 
-def load_fixtures(path=None, values=None, instance_name="") -> tuple[dict, list[str]]:
-    """Load non-secret fixture values from a sidecar env file and/or the environment."""
+def load_fixtures(values=None, instance_name="") -> tuple[dict, list[str]]:
+    """Load common and selected-instance fixture values from the unified config."""
     merged_values = dict(values or {})
-    if path is not None:
-        merged_values.update(parse_env_file(path))
     fixtures = {key: "" for key in FIXTURE_ENV_KEYS}
     fixtures["ci_identifier"] = {}
     configured = []
     slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
     for name, env_key in FIXTURE_ENV_KEYS.items():
-        override_key = (f"USBEM_{slug}_{env_key.removeprefix('USBEM_')}"
-                        if instance_name else env_key)
-        raw = (os.environ.get(override_key) or merged_values.get(env_key, "")).strip()
+        profile_key = (f"USBEM_{slug}_{env_key.removeprefix('USBEM_')}"
+                       if instance_name else "")
+        raw = (os.environ.get(profile_key) if profile_key else "") or \
+              merged_values.get(profile_key, "") or os.environ.get(env_key, "") or \
+              merged_values.get(env_key, "")
+        raw = raw.strip()
         if not raw:
             continue
         if name == "ci_identifier":
@@ -159,45 +158,70 @@ def load_fixtures(path=None, values=None, instance_name="") -> tuple[dict, list[
         else:
             fixtures[name] = raw
         configured.append(name)
+
+    for name in ("caller", "assigned_to"):
+        full_name_key = name + "_full_name"
+        if not fixtures[full_name_key]:
+            first_name = fixtures[name + "_first_name"]
+            last_name = fixtures[name + "_last_name"]
+            if first_name and last_name:
+                fixtures[full_name_key] = f"{first_name} {last_name}".strip()
+                configured.append(full_name_key)
     return fixtures, configured
 
 
-def nearest_env_file(start: Path) -> dict:
-    for folder in [start] + list(start.parents):
-        candidate = folder / ".env"
-        if candidate.is_file():
-            return parse_env_file(candidate)
-    return {}
+def production_url(instance_name: str, values=None) -> str:
+    """Read and validate a production URL from the unified config or its env override."""
+    slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
+    key = f"USBEM_{slug}_URL"
+    url = (os.environ.get(key) or (values or {}).get(key, "")).strip().rstrip("/")
+    if not url:
+        raise ValueError(f"set {key} in tests/usbem_verify.env; copy "
+                         "tests/usbem_verify.env.example first")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError(f"{key} must be a full https:// URL")
+    return url
 
 
-def select_instance(requested: str) -> tuple[str, str]:
-    """Prompt for a known production target, or normalize an explicit instance URL/name."""
+def select_instance(requested: str, config_values=None) -> tuple[str, str]:
+    """Prompt for a configured production target, or normalize a custom instance URL."""
+    config_values = config_values or {}
     if not requested:
         if not sys.stdin.isatty():
             raise ValueError("choose an instance interactively or pass --instance")
         print("Select the ServiceNow instance to test:")
-        for index, (name, _) in enumerate(PRODUCTION_INSTANCES, start=1):
+        for index, name in enumerate(PRODUCTION_INSTANCES, start=1):
             print(f"  {index}. {name}")
         choice = input("Instance [1-4]: ").strip()
         if not choice.isdigit() or not 1 <= int(choice) <= len(PRODUCTION_INSTANCES):
             raise ValueError("enter a number from 1 to 4")
-        return PRODUCTION_INSTANCES[int(choice) - 1]
+        name = PRODUCTION_INSTANCES[int(choice) - 1]
+        return name, production_url(name, config_values)
 
     value = requested.strip()
     candidate_url = value if value.lower().startswith(("http://", "https://")) else "https://" + value
     requested_host = (urllib.parse.urlparse(candidate_url).hostname or "").casefold()
-    for name, url in PRODUCTION_INSTANCES:
+    for name in PRODUCTION_INSTANCES:
+        try:
+            url = production_url(name, config_values)
+        except ValueError:
+            url = ""
+        if value.casefold() == name.casefold():
+            if not url:
+                return name, production_url(name, config_values)
+            return name, url
+        if not url:
+            continue
         known_host = urllib.parse.urlparse(url).hostname or ""
-        if value.casefold() == name.casefold() or requested_host == known_host.casefold():
+        if requested_host == known_host.casefold():
             return name, url
     return "", candidate_url.rstrip("/")
 
 
-def resolve_credentials(args, instance: str, instance_name: str = "", instance_values=None,
-                        shared_values=None) -> dict:
+def resolve_credentials(args, instance: str, instance_name: str = "", config_values=None) -> dict:
     """Resolve one selected instance's OAuth credentials, or Basic auth for a custom target."""
-    instance_values = instance_values or {}
-    shared_values = shared_values or {}
+    config_values = config_values or {}
     if instance_name and (args.user or args.password):
         sys.exit("the four production profiles use their per-instance OAuth credentials; "
                  "remove --user/--password")
@@ -206,35 +230,25 @@ def resolve_credentials(args, instance: str, instance_name: str = "", instance_v
             sys.exit("Basic auth requires both --user and --password")
         return {"mode": "basic", "user": args.user, "password": args.password}
 
-    explicit_values = {}
-    if args.env_file:
-        named = Path(args.env_file).expanduser()
-        if not named.is_file():
-            sys.exit(f"--env-file {named} does not exist")
-        explicit_values = parse_env_file(named)
-
     env_values = dict(os.environ)
     if instance_name:
         slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
-        oauth_id = (instance_values.get("USBEM_OAUTH_CLIENT_ID") or
-                    env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID") or
-                    shared_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID", ""))
-        oauth_secret = (instance_values.get("USBEM_OAUTH_CLIENT_SECRET") or
-                        env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET") or
-                        shared_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET", ""))
-        oauth_scope = (instance_values.get("USBEM_OAUTH_SCOPE") or
-                       env_values.get(f"USBEM_{slug}_OAUTH_SCOPE") or
-                       shared_values.get(f"USBEM_{slug}_OAUTH_SCOPE", ""))
+        oauth_id = (env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID") or
+                    config_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID", ""))
+        oauth_secret = (env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET") or
+                        config_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET", ""))
+        oauth_scope = (env_values.get(f"USBEM_{slug}_OAUTH_SCOPE") or
+                       config_values.get(f"USBEM_{slug}_OAUTH_SCOPE", ""))
         if not oauth_id or not oauth_secret:
-            sys.exit(f"OAuth client ID/secret are missing for {instance_name}; fill the matching "
-                     "entries in tests/instances/production-oauth.env or provide them through "
-                     f"tests/instances/{instance_name}.env")
+            sys.exit(f"OAuth client ID/secret are missing for {instance_name}; fill "
+                     f"USBEM_{slug}_OAUTH_CLIENT_ID and USBEM_{slug}_OAUTH_CLIENT_SECRET "
+                     "in tests/usbem_verify.env")
         return {"mode": "oauth", "client_id": oauth_id,
                 "client_secret": oauth_secret, "scope": oauth_scope}
 
-    oauth_id = explicit_values.get("USBEM_OAUTH_CLIENT_ID") or env_values.get("USBEM_OAUTH_CLIENT_ID", "")
-    oauth_secret = explicit_values.get("USBEM_OAUTH_CLIENT_SECRET") or env_values.get("USBEM_OAUTH_CLIENT_SECRET", "")
-    oauth_scope = explicit_values.get("USBEM_OAUTH_SCOPE") or env_values.get("USBEM_OAUTH_SCOPE", "")
+    oauth_id = env_values.get("USBEM_OAUTH_CLIENT_ID") or config_values.get("USBEM_OAUTH_CLIENT_ID", "")
+    oauth_secret = env_values.get("USBEM_OAUTH_CLIENT_SECRET") or config_values.get("USBEM_OAUTH_CLIENT_SECRET", "")
+    oauth_scope = env_values.get("USBEM_OAUTH_SCOPE") or config_values.get("USBEM_OAUTH_SCOPE", "")
     if oauth_id or oauth_secret:
         if not oauth_id or not oauth_secret:
             sys.exit("OAuth authentication requires USBEM_OAUTH_CLIENT_ID and "
@@ -242,8 +256,7 @@ def resolve_credentials(args, instance: str, instance_name: str = "", instance_v
         return {"mode": "oauth", "client_id": oauth_id,
                 "client_secret": oauth_secret, "scope": oauth_scope}
 
-    sources = [explicit_values, env_values, nearest_env_file(Path.cwd()),
-               nearest_env_file(Path(__file__).resolve().parent)]
+    sources = [config_values, env_values]
 
     def first(keys, override):
         if override:
@@ -990,7 +1003,7 @@ class Verifier:
                        f"caller_id={value('caller_id') or '(empty)'}")
         else:
             self.check("fields", "caller defaults to the configured sys_id", None,
-                       f"set {FIXTURE_ENV_KEYS['default_caller_sys_id']} to the instance property value")
+                       "set the selected instance's default caller sys_id to the instance property value")
         if expected_default_caller:
             missing_caller = self.push(
                 "fields-caller-name-not-found", direct_to_incident="true",
@@ -1009,7 +1022,7 @@ class Verifier:
                            f"no incident: {missing_caller.get('dti_incident_status')}")
         else:
             self.check("fields", "unmatched caller name uses configured default sys_id", None,
-                       f"set {FIXTURE_ENV_KEYS['default_caller_sys_id']} to the instance property value")
+                       "set the selected instance's default caller sys_id to the instance property value")
         self.check("fields", "tagged as a USBEM DTI incident",
                    str(value("correlation_display")) == "USBEM DTI", str(value("correlation_display")))
 
@@ -1081,8 +1094,10 @@ class Verifier:
             expected_user = expected_sys_id or supplied_user
             case = f"{field_name} by {input_kind}"
             if not supplied_user:
+                role = "caller" if field_name == "caller_id" else "assignee"
                 self.check("fields", case + " mapping", None,
-                           f"set {FIXTURE_ENV_KEYS[fixture_key]} in the fixture env file")
+                           f"set that instance's {role} sys_id or first name, and the shared {role} last name, "
+                           "in tests/usbem_verify.env")
                 continue
             caller = self.push("fields-" + case, direct_to_incident="true",
                                **{field_name: supplied_user})
@@ -1096,7 +1111,7 @@ class Verifier:
             if input_kind == "full name" and not expected_sys_id and not display:
                 self.check("fields", case + " mapping", None,
                            f"Incident API returned sys_id {stored or '(empty)'} without a display value; "
-                           f"set {FIXTURE_ENV_KEYS[expected_sys_id_key]} for sys_id-only validation")
+                           "set the selected instance's corresponding user sys_id for sys_id-only validation")
             else:
                 self.check("fields", case + " mapping",
                            field == field_name and resolved,
@@ -1119,8 +1134,8 @@ class Verifier:
                            f"no incident: {ambiguous.get('dti_incident_status')}")
         else:
             self.check("fields", "ambiguous caller name uses configured default sys_id", None,
-                       f"set a duplicated full name in {FIXTURE_ENV_KEYS['ambiguous_caller_full_name']} "
-                       f"and {FIXTURE_ENV_KEYS['default_caller_sys_id']}")
+                       "set a duplicated full name in the common fixtures and a default caller sys_id "
+                       "for the selected instance")
 
         typo = self.push("fields-typo", direct_to_incident="true", catgeory="Network",
                          short_description="typo check")
@@ -1146,7 +1161,7 @@ class Verifier:
                            f"no incident: {named.get('dti_incident_status')}")
         else:
             self.check("fields", "the payload assignment_group wins", None,
-                       f"set {FIXTURE_ENV_KEYS['assignment_group']} in the fixture env file")
+                       f"set {FIXTURE_ENV_KEYS['assignment_group']} in tests/usbem_verify.env")
 
     def group_lookups(self) -> None:
         """Exercise fixture-driven CMDB, group, service, and offering resolution."""
@@ -1158,7 +1173,7 @@ class Verifier:
                                           ("CI exact name", ci_name, ci_name)):
             if not supplied:
                 self.check("lookups", label + " lookup", None,
-                           f"set {FIXTURE_ENV_KEYS['ci_sys_id']} or {FIXTURE_ENV_KEYS['ci_name']} in the fixture env file")
+                           f"set {FIXTURE_ENV_KEYS['ci_sys_id']} or {FIXTURE_ENV_KEYS['ci_name']} in tests/usbem_verify.env")
                 continue
             case = "lookup-ci-" + ("sysid" if label == "CI sys_id" else "name")
             payload = self.payload(case, directToIncident="true", cmdbCi=supplied)
@@ -1186,7 +1201,7 @@ class Verifier:
                            f"(expected {expected_ci or 'a resolved CI'})")
         else:
             self.check("lookups", "camelCase ciType + ciIdentifier resolve", None,
-                       f"set {FIXTURE_ENV_KEYS['ci_type']} and {FIXTURE_ENV_KEYS['ci_identifier']} in the fixture env file")
+                       f"set {FIXTURE_ENV_KEYS['ci_type']} and {FIXTURE_ENV_KEYS['ci_identifier']} in tests/usbem_verify.env")
 
         support_group = str(self.fixtures.get("ci_support_group") or "").strip()
         if ci_input and support_group:
@@ -1201,7 +1216,7 @@ class Verifier:
                            f"{display or stored or '(empty)'} (expected {support_group})")
         else:
             self.check("lookups", "CI support group is the DTI fallback", None,
-                       f"set a CI fixture and {FIXTURE_ENV_KEYS['ci_support_group']} in the fixture env file")
+                       f"set a CI fixture and {FIXTURE_ENV_KEYS['ci_support_group']} in tests/usbem_verify.env")
 
         group_fixture = str(self.fixtures.get("assignment_group") or "").strip()
         if group_fixture:
@@ -1216,7 +1231,7 @@ class Verifier:
                            f"{display or stored or '(empty)'} (expected {group_fixture})")
         else:
             self.check("lookups", "camelCase assignmentGroup resolves", None,
-                       f"set {FIXTURE_ENV_KEYS['assignment_group']} in the fixture env file")
+                       f"set {FIXTURE_ENV_KEYS['assignment_group']} in tests/usbem_verify.env")
 
         service = str(self.fixtures.get("service_name") or "").strip()
         if service:
@@ -1232,7 +1247,7 @@ class Verifier:
                            f"{field or 'business_service/service'}: {display or stored or '(empty)'}")
         else:
             self.check("lookups", "camelCase usbemService resolves", None,
-                       f"set {FIXTURE_ENV_KEYS['service_name']} in the fixture env file")
+                       f"set {FIXTURE_ENV_KEYS['service_name']} in tests/usbem_verify.env")
 
         offering = str(self.fixtures.get("offering_name") or "").strip()
         if offering:
@@ -1249,7 +1264,7 @@ class Verifier:
                            f"{display or stored or '(empty)'} (expected {offering})")
         else:
             self.check("lookups", "camelCase usbemOffering resolves", None,
-                       f"set {FIXTURE_ENV_KEYS['offering_name']} in the fixture env file")
+                       f"set {FIXTURE_ENV_KEYS['offering_name']} in tests/usbem_verify.env")
 
         car_id = str(self.fixtures.get("business_app_car_id") or "").strip()
         if car_id:
@@ -1273,7 +1288,7 @@ class Verifier:
                                if resolved else "cmdb_ci_business_app is absent from alert additional_info")
         else:
             self.check("lookups", "camelCase usbemCarId resolves", None,
-                       f"set {FIXTURE_ENV_KEYS['business_app_car_id']} in the fixture env file")
+                       f"set {FIXTURE_ENV_KEYS['business_app_car_id']} in tests/usbem_verify.env")
 
     def check_generating_alert(self) -> None:
         """incident.u_generating_alert is customer-specific: where it exists it must point at the
@@ -1490,79 +1505,35 @@ def main() -> int:
     parser.add_argument("--user", default="", help="account with the API/table permissions for the selected profile")
     parser.add_argument("--password", default="")
     parser.add_argument("--env-file", help=(
-        "optional selected-instance credential/fixture file; production also auto-loads "
-        "tests/instances/production-oauth.env"))
-    parser.add_argument("--fixture-file", help=(
-        "fixture values in KEY=VALUE form; production defaults to its selected instance .env, "
-        "custom targets default to tests/usbem_verify.fixtures.env; USBEM_FIXTURE_* environment "
-        "variables override file values"))
+        "override the unified config file; default tests/usbem_verify.env"))
     parser.add_argument("--ca-bundle", default="", help="PEM file to trust (a corporate root)")
     parser.add_argument("--insecure", action="store_true", help="skip TLS verification, last resort")
     parser.add_argument("--version", action="version", version="usbem_verify " + VERSION)
     args = parser.parse_args()
 
+    config_path = (Path(args.env_file).expanduser() if args.env_file else
+                   Path(__file__).resolve().with_name("usbem_verify.env"))
+    config_values = {}
+    if config_path.is_file():
+        try:
+            config_values = parse_env_file(config_path)
+        except OSError as error:
+            parser.error(f"could not read config file {config_path}: {error}")
+    elif args.env_file:
+        parser.error(f"config file does not exist: {config_path}")
+
     try:
-        instance_name, instance = select_instance(args.instance)
+        instance_name, instance = select_instance(args.instance, config_values)
     except ValueError as error:
         parser.error(str(error))
 
-    instance_values = {}
-    shared_oauth_values = {}
-    instance_config_path = None
-    if instance_name:
-        if args.env_file:
-            instance_config_path = Path(args.env_file).expanduser()
-        else:
-            instance_config_path = Path(__file__).resolve().parent / "instances" / (instance_name + ".env")
-        if instance_config_path.is_file():
-            try:
-                instance_values = parse_env_file(instance_config_path)
-            except OSError as error:
-                parser.error(f"could not read instance config: {error}")
-            configured_name = instance_values.get("USBEM_INSTANCE_NAME", "").strip()
-            if configured_name and configured_name.casefold() != instance_name.casefold():
-                parser.error(f"{instance_config_path} is for {configured_name}, not {instance_name}")
-        shared_oauth_path = Path(__file__).resolve().parent / "instances" / "production-oauth.env"
-        if shared_oauth_path.is_file():
-            try:
-                shared_oauth_values = parse_env_file(shared_oauth_path)
-            except OSError as error:
-                parser.error(f"could not read shared OAuth config: {error}")
-
-    configured_fixture_path = (args.fixture_file or
-                                ("" if instance_name else os.environ.get("USBEM_FIXTURE_FILE", ""))).strip()
-    if configured_fixture_path:
-        fixture_path = Path(configured_fixture_path).expanduser()
-    elif instance_name:
-        fixture_path = instance_config_path
-    else:
-        fixture_path = Path(__file__).resolve().with_name("usbem_verify.fixtures.env")
-    if fixture_path is not None and not fixture_path.is_file():
-        if configured_fixture_path:
-            parser.error(f"fixture file does not exist: {fixture_path}")
-        fixture_path = None
-
-    if instance_name and not instance_config_path.is_file():
-        slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
-        has_profile_oauth = bool(instance_values.get("USBEM_OAUTH_CLIENT_ID") and
-                                  instance_values.get("USBEM_OAUTH_CLIENT_SECRET"))
-        has_shared_oauth = bool(shared_oauth_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID") and
-                                shared_oauth_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET"))
-        has_env_oauth = bool(os.environ.get(f"USBEM_{slug}_OAUTH_CLIENT_ID") and
-                             os.environ.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET"))
-        if not (has_profile_oauth or has_shared_oauth or has_env_oauth):
-            parser.error("copy tests/instances/production-oauth.env.example to "
-                         "tests/instances/production-oauth.env and fill the selected instance's "
-                         "client ID and secret")
     try:
-        fixtures, configured_fixtures = load_fixtures(
-            fixture_path, values=instance_values if instance_name else None,
-            instance_name=instance_name)
+        fixtures, configured_fixtures = load_fixtures(values=config_values,
+                                                       instance_name=instance_name)
     except (OSError, ValueError) as error:
         parser.error(str(error))
 
-    auth = resolve_credentials(args, instance, instance_name, instance_values,
-                               shared_oauth_values)
+    auth = resolve_credentials(args, instance, instance_name, config_values)
     access_profile = args.access_profile or ("limited" if instance_name else "standard")
     groups = args.only or (["compat", "payload_contract"] if args.contract == "legacy" else list(GROUPS))
     if access_profile == "limited" and not args.only and args.contract == "legacy":
@@ -1589,7 +1560,7 @@ def main() -> int:
     if args.contract == "modern":
         print(f"expecting components to report {args.expect_version}")
     print(f"prefix   {prefix}")
-    print(f"fixtures {fixture_path if fixture_path else 'no sidecar file'} "
+    print(f"config   {config_path} "
           f"({len(configured_fixtures)} configured keys: "
           f"{', '.join(configured_fixtures) if configured_fixtures else 'none'})")
     transport = ("macOS SecureTransport/Keychain" if sn._macos_curl else
