@@ -34,7 +34,9 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
   Zurich (verified), and the spin is kept only as a fallback
 - unknown payload field names come back in `incident_fields_skipped` instead of vanishing
 - `--env-file` reads the named file, not the nearest `.env` beside it
-- verification groups are now deploy / compat / fast / wait / fields / ci / notes / edge / timing
+- verification covers compat / fast / fields / notes / edge / timing. `--access-profile limited`
+  runs compat+fast with Incident RW and Alert RWC; it retains tagged records because delete access
+  is not assumed. It does not use `dti_wait_for_incident` or Scripts - Background.
 
 ## Release 2026.09.25.3 (2026-09-25)
 

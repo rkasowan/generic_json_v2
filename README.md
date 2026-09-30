@@ -469,6 +469,30 @@ Typical response fields:
 python3 tests/usbem_verify.py
 ```
 
+To exercise a different listener, set its REST API `source` parameter explicitly. For example,
+on the PDI the original listener is `firstGenericJson` and predates the modern DTI response
+fields:
+
+```bash
+python3 tests/usbem_verify.py --source firstGenericJson --contract legacy --only compat
+```
+
+Legacy mode verifies the original event response envelope, event creation, alert creation,
+no-incident behavior without DTI, and `records` batching. It does not require the modern
+component `versions` block or DTI result fields. The default modern compatibility group also
+checks the old `dti_short_description` and `dti_work_note` aliases against the current listener.
+
+For production credentials with Incident read/write and Alert read/write/create only, use:
+
+```bash
+python3 tests/usbem_verify.py --access-profile limited
+```
+
+This profile runs only compatibility and fast DTI checks, reads incident and alert records for
+verification, never invokes Scripts - Background, and retains test records because delete access
+is not assumed. It prints the unique prefix for those records. The fast check expects the incident
+in the endpoint response first, then verifies that the Business Rule links its alert afterward.
+
 [tests/usbem_verify.py](tests/usbem_verify.py) is a single file with no dependencies — copy it
 anywhere and run it on a stock Python 3.9+. It drives the live endpoint the
 way a sender does, tags everything it creates with a unique prefix, deletes it afterwards, and
@@ -476,19 +500,17 @@ exits non-zero if anything failed. Groups, selectable with `--only`:
 
 | Group | What it proves |
 |---|---|
-| `deploy` | the endpoint reports this release's version for every component, the reconcile rule is a filtered synchronous `after` rule, and nothing queues an event or runs on a schedule |
-| `compat` | the original contract holds: plain events, `records` batches, no incident without DTI, and the legacy `dti_short_description` / `dti_work_note` names |
-| `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, opens a new one once it is Resolved/Closed/Canceled, and the alert follows |
-| `wait` | the same cycle with `dti_wait_for_incident=true` |
+| `compat` | response envelope, plain events, alerts, `records` batches, no incident without DTI, and legacy `dti_short_description` / `dti_work_note` names on the modern listener |
+| `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, opens a new one once it is Resolved/Closed/Canceled, and the Business Rule links the alert afterward |
 | `fields` | NetCool, category, subcategory, caller, impact/urgency, and every payload override |
-| `ci` | the assignment group chain against a real CI: the payload group, then `cmdb_ci.support_group`, then the level 2 tier, then the alert's own group |
-| `notes` | the connector note, the created-from line naming the alert, sender notes on the incident (including the legacy `dti_work_note`), `alert_work_notes` on the alert, a plain `work_notes` on a non-DTI alert, and that a note is not re-posted on later alert writes |
+| `notes` | the connector note, the created-from line naming the message key, sender notes on the incident (including the legacy `dti_work_note`), `alert_work_notes` on the alert, a plain `work_notes` on a non-DTI alert, and that a note is not re-posted on later alert writes |
 | `edge` | message keys longer than `incident.correlation_id`, concurrent events for one key, and a batch where only one record asks for an incident |
-| `timing` | round-trip milliseconds for each path, reported as an observation |
+| `timing` | round-trip milliseconds for plain events and immediate DTI, reported as an observation |
 
 `--keep` leaves the records in place for inspection, `--json out.json` writes the results, and
-`--prefix` sets the tag. It needs an admin account: resolving and closing incidents goes through a
-background script, because the Table API trips over the mandatory close fields.
+`--prefix` sets the tag. Terminal-state checks use only Incident API update access; they report as
+skipped when the caller cannot change the incident state. No admin background-script access is
+used.
 
 Credentials come from `--instance/--user/--password`, from the environment
 (`servicenow_instance` / `servicenow_user` / `servicenow_password`), or from a `.env` — the one
