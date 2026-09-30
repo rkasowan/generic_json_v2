@@ -34,9 +34,18 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
   Zurich (verified), and the spin is kept only as a fallback
 - unknown payload field names come back in `incident_fields_skipped` instead of vanishing
 - `--env-file` reads the named file, not the nearest `.env` beside it
-- verification covers compat / fast / fields / notes / edge / timing. `--access-profile limited`
-  runs compat+fast with Incident RW and Alert RWC; it retains tagged records because delete access
-  is not assumed. It does not use `dti_wait_for_incident` or Scripts - Background.
+- verification covers compat / legacy payloads / fast DTI / incident fields / fixture-driven
+  lookups / manually confirmed notes / edge / timing. `--access-profile limited` uses Incident RW
+  and Alert RWC, retains tagged records, and never queries `sys_journal_field` or runs Scripts -
+  Background. Work-note checks print Incident/Alert numbers and prompt for manual y/n confirmation.
+- the verifier loads per-instance CI, CI identifier, group, service, offering, CAR ID, and caller
+  fixtures from ignored `tests/usbem_verify.fixtures.env`; the tracked
+  `tests/usbem_verify.fixtures.example.env` is its blank template. Alternate instance files use
+  `--fixture-file`. Blank fixtures report as skipped. Field checks verify default
+  Software/Monitoring Alert and Hardware/Server overrides plus caller_id by sys_id or configured
+  unique first name (for anonymized lower instances).
+  `--source firstGenericJson --contract legacy` selects the original listener's response envelope
+  while still running the legacy payload matrix.
 
 ## Release 2026.09.25.3 (2026-09-25)
 

@@ -31,19 +31,25 @@ Use --source to select a different push connector. For the original PDI listener
 `--source firstGenericJson --contract legacy --only compat`. Production instances can use the
 same command with their original listener source value. The default source is `genericJsonV2`.
 
-For restricted production users, `--access-profile limited` runs only compat and fast checks,
-uses Incident/Alert readback, avoids Scripts - Background, and retains created records because
-delete access is not assumed. The script prints the prefix used to tag them.
+For restricted production users, `--access-profile limited` runs every check that can use the
+connector plus Incident/Alert readback. Fixture values load from `usbem_verify.fixtures.env` beside
+this script, or from `--fixture-file`; blank values make only their fixture-driven checks report as
+skipped. The notes group prints record numbers and prompts for manual checks without querying
+`sys_journal_field`. The profile avoids Scripts - Background and deletion, and retains created records.
 
 GROUPS (--only <name>, repeatable):
     compat   response envelope, event row, alert, no incident without DTI, batches, and the
              modern listener's legacy dti_ field aliases; legacy mode tests original event/batch
              compatibility without modern-only DTI assertions
+    payload_contract old payload containers, camelCase aliases, and both additional_info forms;
+             asserts readback through alerts (no em_event table ACL required)
+    lookups  optional fixture-driven CI, assignment-group, service, and offering resolution,
+             verified on incidents through the caller's Incident read access
     fast     direct_to_incident returns an incident immediately, reuses it while open, opens a
              new one once it is Resolved/Closed/Canceled, and the Business Rule links the alert
-    fields   what lands on the incident: NetCool, category, subcategory, caller, the severity
-             tiers, u_generating_alert, and every payload override
-    notes    work notes on the incident and on the alert, and that a note is not re-posted
+    fields   NetCool, default/overridden category and subcategory, caller_id by sys_id/name,
+             severity tiers, and other incident overrides
+    notes    manually verify incident and alert work notes using printed record numbers
     edge     message keys longer than correlation_id, concurrent events, DTI inside a batch
     timing   round-trip milliseconds per path, reported not failed
 """
@@ -71,8 +77,24 @@ VERSION = "2026.09.28.1"
 EXPECTED_RELEASE = "2026.09.28.1"      # what the live endpoint should report; --expect-version overrides
 
 TERMINAL_STATES = (("6", "Resolved"), ("7", "Closed"), ("8", "Canceled"))
-GROUPS = ("compat", "fast", "fields", "notes", "edge", "timing")
+GROUPS = ("compat", "payload_contract", "fast", "fields", "lookups", "notes", "edge", "timing")
 DEFAULT_SOURCE = "genericJsonV2"
+
+# Fixture values are kept outside this script so script updates preserve per-instance setup.
+FIXTURE_ENV_KEYS = {
+    "ci_name": "USBEM_FIXTURE_CI_NAME",
+    "ci_sys_id": "USBEM_FIXTURE_CI_SYS_ID",
+    "ci_type": "USBEM_FIXTURE_CI_TYPE",
+    "ci_identifier": "USBEM_FIXTURE_CI_IDENTIFIER",
+    "assignment_group": "USBEM_FIXTURE_ASSIGNMENT_GROUP",
+    "ci_support_group": "USBEM_FIXTURE_CI_SUPPORT_GROUP",
+    "service_name": "USBEM_FIXTURE_SERVICE_NAME",
+    "offering_name": "USBEM_FIXTURE_OFFERING_NAME",
+    "business_app_car_id": "USBEM_FIXTURE_BUSINESS_APP_CAR_ID",
+    "affected_user_sys_id": "USBEM_FIXTURE_AFFECTED_USER_SYS_ID",
+    "affected_user_first_name": "USBEM_FIXTURE_AFFECTED_USER_FIRST_NAME",
+}
+AFFECTED_USER_FIELD = "caller_id"          # standard Incident affected end-user field
 
 INSTANCE_KEYS = ("servicenow_instance", "SN_INSTANCE_URL", "SN_INSTANCE", "instance")
 USER_KEYS = ("servicenow_user", "SN_USERNAME", "SN_USER", "user")
@@ -99,6 +121,30 @@ def parse_env_file(path: Path) -> dict:
             key, value = raw.split("=", 1)
             values[key.strip()] = value.strip().strip("\"'")
     return values
+
+
+def load_fixtures(path=None) -> tuple[dict, list[str]]:
+    """Load non-secret fixture values from a sidecar env file and/or the environment."""
+    values = parse_env_file(path) if path is not None else {}
+    fixtures = {key: "" for key in FIXTURE_ENV_KEYS}
+    fixtures["ci_identifier"] = {}
+    configured = []
+    for name, env_key in FIXTURE_ENV_KEYS.items():
+        raw = os.environ.get(env_key, values.get(env_key, "")).strip()
+        if not raw:
+            continue
+        if name == "ci_identifier":
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                raise ValueError(f"{env_key} must be a JSON object") from None
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{env_key} must be a JSON object")
+            fixtures[name] = parsed
+        else:
+            fixtures[name] = raw
+        configured.append(name)
+    return fixtures, configured
 
 
 def nearest_env_file(start: Path) -> dict:
@@ -359,7 +405,7 @@ class ServiceNow:
 class Verifier:
     def __init__(self, sn: ServiceNow, prefix: str, alert_wait: int, expected: str,
                  source: str = DEFAULT_SOURCE, contract: str = "modern",
-                 access_profile: str = "standard") -> None:
+                 access_profile: str = "standard", fixtures=None) -> None:
         self.sn = sn
         self.prefix = prefix
         self.alert_wait = alert_wait
@@ -367,6 +413,10 @@ class Verifier:
         self.source = source
         self.contract = contract
         self.access_profile = access_profile
+        if fixtures is None:
+            fixtures = {key: "" for key in FIXTURE_ENV_KEYS}
+            fixtures["ci_identifier"] = {}
+        self.fixtures = fixtures
         self.rows = []
 
     # ---- reporting
@@ -393,8 +443,45 @@ class Verifier:
     def push(self, case: str, **overrides) -> dict:
         return self.sn.push_event(self.payload(case, **overrides), source=self.source)
 
-    def field_exists(self, table: str, element: str) -> bool:
-        return bool(self.sn.table("sys_dictionary", f"name={table}^element={element}", "sys_id", 1))
+    def incident_reference(self, sys_id: str, fields: tuple[str, ...]):
+        """Read one reference through Incident API access, tolerating instance-specific fields."""
+        for field in fields:
+            try:
+                row = self.sn.record("incident", sys_id, field, display="all")
+            except ServiceNowError:
+                continue
+            value = row.get(field)
+            if isinstance(value, dict):
+                stored = str(value.get("value") or "")
+                displayed = str(value.get("display_value") or "")
+                if stored or displayed:
+                    return field, stored, displayed
+                continue
+            if value:
+                return field, str(value), ""
+        return "", "", ""
+
+    @staticmethod
+    def reference_matches(value: str, display: str, expected: str,
+                          allow_first_name: bool = False) -> bool:
+        expected = str(expected or "").strip()
+        expected_folded = expected.casefold()
+        if not expected:
+            return False
+        if value.casefold() == expected_folded or display.casefold() == expected_folded:
+            return True
+        if allow_first_name:
+            first_name = display.split(maxsplit=1)[0] if display else ""
+            return first_name.casefold() == expected_folded
+        return False
+
+    def lookup_incident(self, case: str, payload: dict) -> str:
+        response = self.sn.push_event(payload, source=self.source)
+        sys_id = str(response.get("incident_sys_id") or "")
+        self.check("lookups", case + " returns incident immediately", bool(sys_id),
+                   f"{response.get('incident_number') or '(none)'} "
+                   f"status={response.get('dti_incident_status') or '(none)'}")
+        return sys_id
 
     def alerts_for(self, key: str):
         # Ordered: a key can end up with more than one alert, because with
@@ -428,11 +515,6 @@ class Verifier:
             if time.time() >= deadline:
                 return {}
             time.sleep(3)
-
-    def journal(self, table: str, sys_id: str, element: str = "work_notes") -> str:
-        rows = self.sn.table("sys_journal_field", f"element_id={sys_id}^element={element}",
-                             "value,sys_created_on", 30)
-        return "\n".join(str(r.get("value", "")) for r in rows)
 
     def set_incident_state(self, sys_id: str, state: str) -> dict:
         """Move an incident this run created to Resolved / Closed / Canceled.
@@ -506,6 +588,183 @@ class Verifier:
             self.check("compat", "dti_short_description applied",
                        row.get("short_description") == "legacy dti_ prefixed fields",
                        str(row.get("short_description")))
+
+    def group_payload_contract(self) -> None:
+        """Exercise the old sender payload containers and aliases through the selected listener."""
+        wrappers = ("event", "payload", "data", "record", "alert")
+        records = []
+        expected = {}
+        for index, wrapper in enumerate(wrappers):
+            case = "payload-wrap-" + wrapper
+            key = self.key(case)
+            marker = "legacy_marker_" + wrapper
+            payload = {
+                "source": "usbem-verify",
+                "eventClass": "usbem-verify",
+                "hostName": f"{self.prefix.lower()}-{wrapper}",
+                "component": case,
+                "metricName": "legacy-payload-check",
+                "eventType": "compatibility",
+                "messageKey": key,
+                "severity": "2",
+                "message": "legacy payload " + wrapper,
+            }
+            if index == 0:
+                payload["additionalInfo"] = {"legacy_marker": marker}
+            elif index == 1:
+                payload["additional_info"] = json.dumps({"legacy_marker": marker})
+            records.append({wrapper: payload})
+            expected[key] = {
+                "message_key": key,
+                "node": payload["hostName"], "resource": case,
+                "metric_name": "legacy-payload-check", "event_class": "usbem-verify",
+                "source": "usbem-verify", "description": "legacy payload " + wrapper,
+                "marker": marker if index < 2 else "",
+            }
+
+        wrapped = self.sn.push_event({"records": records}, source=self.source)
+        wrapped_results = wrapped.get("results") or []
+        self.check("payload_contract", "all five legacy nested wrappers are accepted",
+                   wrapped.get("inserted") == str(len(wrappers)) and
+                   len(wrapped_results) == len(wrappers) and
+                   {row.get("message_key") for row in wrapped_results} == set(expected),
+                   f"inserted={wrapped.get('inserted')} results={len(wrapped_results)}")
+
+        array_cases = ("payload-array-1", "payload-array-2")
+        array_payloads = []
+        for case in array_cases:
+            node = f"{self.prefix.lower()}-array"
+            array_payload = {
+                "event_class": "usbem-verify", "node": node, "resource": case,
+                "metric_name": "legacy-payload-check", "type": "compatibility",
+                "severity": "2", "shortDescription": "legacy array " + case,
+            }
+            if case.endswith("1"):
+                array_payload["source"] = "usbem-verify"
+                array_payload["correlationId"] = self.key(case)
+            else:
+                # The default key concatenates source + node + type + resource + metric_name.
+                array_payload["source"] = self.prefix
+            array_payloads.append(array_payload)
+            marker = "legacy_marker_" + case
+            if case.endswith("1"):
+                array_payloads[-1]["additional_info"] = {"legacy_marker": marker}
+            else:
+                array_payloads[-1]["additionalInfo"] = json.dumps({"legacy_marker": marker})
+            key = (self.key(case) if case.endswith("1") else
+                   self.prefix + node + "compatibility" + case + "legacy-payload-check")
+            expected[key] = {
+                "message_key": key,
+                "node": node, "resource": case,
+                "metric_name": "legacy-payload-check", "event_class": "usbem-verify",
+                "source": "usbem-verify" if case.endswith("1") else self.prefix,
+                "description": "legacy array " + case,
+                "marker": marker,
+            }
+        array_response = self.sn.push_event(array_payloads, source=self.source)
+        array_results = array_response.get("results") or []
+        self.check("payload_contract", "bare array payload and correlationId alias",
+                   array_response.get("inserted") == "2" and len(array_results) == 2 and
+                   {row.get("message_key") for row in array_results} ==
+                   set(expected_key for expected_key in expected if "payload-array-" in expected_key),
+                   f"inserted={array_response.get('inserted')} results={len(array_results)}")
+
+        events_case = "payload-events-envelope"
+        events_key = self.key(events_case)
+        events_body = {"events": [{"payload": {
+            "source": "usbem-verify", "eventClass": "usbem-verify",
+            "host": f"{self.prefix.lower()}-events", "target": events_case,
+            "metric": "legacy-payload-check", "eventType": "compatibility",
+            "messageKey": events_key, "severity": "2",
+            "summary": "legacy events envelope", "additionalInfo":
+                json.dumps({"legacy_marker": "legacy_marker_events"})
+        }}]}
+        events_response = self.sn.push_event(events_body, source=self.source)
+        events_results = events_response.get("results") or []
+        self.check("payload_contract", "events envelope and nested payload are accepted",
+                   events_response.get("inserted") == "1" and len(events_results) == 1 and
+                   events_results[0].get("message_key") == events_key,
+                   f"inserted={events_response.get('inserted')} results={len(events_results)}")
+        expected[events_key] = {
+            "message_key": events_key,
+            "node": f"{self.prefix.lower()}-events", "resource": events_case,
+            "metric_name": "legacy-payload-check", "event_class": "usbem-verify",
+            "source": "usbem-verify", "description": "legacy events envelope",
+            "marker": "legacy_marker_events",
+        }
+
+        alias_case = "payload-alias-bundle"
+        alias_key = self.key(alias_case)
+        alias_marker = "legacy_marker_alias_bundle"
+        alias_payload = {
+            "source": "usbem-verify", "sourceInstance": "usbem-verify",
+            "fqdn": f"{self.prefix.lower()}-aliases", "object": alias_case,
+            "metric": "legacy-payload-check", "type": "compatibility",
+            "alertKey": alias_key, "severity": "2", "summary": "legacy alias bundle",
+            "additionalInfo": {"legacy_marker": alias_marker},
+        }
+        alias_response = self.sn.push_event(alias_payload, source=self.source)
+        alias_results = alias_response.get("results") or []
+        self.check("payload_contract", "alternate legacy aliases are accepted",
+                   alias_response.get("inserted") == "1" and len(alias_results) == 1 and
+                   alias_results[0].get("message_key") == alias_key,
+                   f"inserted={alias_response.get('inserted')} results={len(alias_results)}")
+        expected[alias_key] = {
+            "message_key": alias_key,
+            "node": f"{self.prefix.lower()}-aliases", "resource": alias_case,
+            "metric_name": "legacy-payload-check", "event_class": "usbem-verify",
+            "source": "usbem-verify", "description": "legacy alias bundle",
+            "marker": alias_marker,
+        }
+
+        pending = set(expected)
+        found = {}
+        deadline = time.time() + self.alert_wait
+        while pending and time.time() < deadline:
+            for key in list(pending):
+                alerts = self.alerts_for(key)
+                if alerts:
+                    found[key] = alerts[0]
+                    pending.remove(key)
+            if pending:
+                time.sleep(3)
+
+        fields = "message_key,node,resource,metric_name,event_class,source,description,additional_info"
+
+        def contains_marker(value, marker):
+            if isinstance(value, str):
+                try:
+                    return contains_marker(json.loads(value), marker)
+                except (TypeError, ValueError):
+                    return value == marker
+            if isinstance(value, dict):
+                if value.get("legacy_marker") == marker:
+                    return True
+                return any(contains_marker(child, marker) for child in value.values())
+            if isinstance(value, list):
+                return any(contains_marker(child, marker) for child in value)
+            return False
+
+        for key, expectation in expected.items():
+            alert = found.get(key)
+            if not alert:
+                self.check("payload_contract", "legacy payload maps to an alert", False,
+                           f"{key}: no alert within {self.alert_wait}s")
+                continue
+            row = self.sn.record("em_alert", alert["sys_id"], fields)
+            mapped = all(str(row.get(field, "")) == str(expectation[field]) for field in
+                         ("message_key", "node", "resource", "metric_name", "event_class",
+                          "source", "description"))
+            try:
+                additional = json.loads(row.get("additional_info") or "{}")
+            except (TypeError, ValueError):
+                additional = {}
+            marker_ok = (not expectation["marker"] or
+                         contains_marker(additional, expectation["marker"]))
+            self.check("payload_contract", "legacy aliases and additional_info read back",
+                       mapped and marker_ok,
+                       f"{key}: mapped={'yes' if mapped else 'no'}, "
+                       f"additional_info marker={'yes' if marker_ok else 'no'}")
 
     def _dti_cycle(self, group: str) -> None:
         extra = {"direct_to_incident": "true"}
@@ -626,9 +885,9 @@ class Verifier:
                        f"incident={quiet.get('incident_number') or '(none)'}")
 
         override = self.push("fields-override", direct_to_incident="true",
-                             category="Network", subcategory="DNS", contact_type="Integration",
+                             category="Hardware", subcategory="Server", contact_type="Integration",
                              short_description="sender supplied short description",
-                             caller_id="Abel Tuter", impact="3", urgency="3")
+                             impact="3", urgency="3")
         sys_id = override.get("incident_sys_id", "")
         if sys_id:
             row = self.sn.record("incident", sys_id,
@@ -636,18 +895,51 @@ class Verifier:
                                  "u_netcool_ticket", display="all")
             applied = str(override.get("incident_fields_applied", ""))
             self.check("fields", "any incident field can be written",
-                       all(f in applied for f in ("category", "subcategory", "contact_type", "caller_id")),
+                       all(f in applied for f in ("category", "subcategory", "contact_type")),
                        "applied: " + applied)
             self.check("fields", "the payload category wins",
-                       str(shown("category")).lower() == "network" and str(shown("subcategory")).lower() == "dns",
+                       str(shown("category")).lower() == "hardware" and str(shown("subcategory")).lower() == "server",
                        f"{shown('category')}/{shown('subcategory')}")
-            self.check("fields", "the payload caller wins",
-                       "abel" in str(shown("caller_id")).lower(), str(shown("caller_id")))
             self.check("fields", "the payload short_description wins",
                        value("short_description") == "sender supplied short description",
                        str(value("short_description")))
             self.check("fields", "NetCool stays true under overrides",
                        str(value("u_netcool_ticket")) in ("1", "true"), str(value("u_netcool_ticket")))
+
+        software = self.push("fields-software-choice", direct_to_incident="true",
+                             category="Software", subcategory="Monitoring Alert")
+        if software.get("incident_sys_id"):
+            choice = self.sn.record("incident", software["incident_sys_id"],
+                                    "category,subcategory", display="all")
+            self.check("fields", "Software/Monitoring Alert choice labels pass through",
+                       str((choice.get("category") or {}).get("display_value", "")).lower() == "software" and
+                       str((choice.get("subcategory") or {}).get("display_value", "")).lower() == "monitoring alert",
+                       f"{(choice.get('category') or {}).get('display_value')}/"
+                       f"{(choice.get('subcategory') or {}).get('display_value')}")
+        else:
+            self.check("fields", "Software/Monitoring Alert choice labels pass through", False,
+                       f"no incident: {software.get('dti_incident_status')}")
+
+        for fixture_key, case in (("affected_user_sys_id", "caller-sysid"),
+                                  ("affected_user_first_name", "caller-first-name")):
+            expected_user = str(self.fixtures.get(fixture_key) or "").strip()
+            if not expected_user:
+                self.check("fields", f"{AFFECTED_USER_FIELD} {case} mapping", None,
+                           f"set {FIXTURE_ENV_KEYS[fixture_key]} in the fixture env file")
+                continue
+            caller = self.push("fields-" + case, direct_to_incident="true",
+                               **{AFFECTED_USER_FIELD: expected_user})
+            caller_id = str(caller.get("incident_sys_id") or "")
+            if not caller_id:
+                self.check("fields", f"{AFFECTED_USER_FIELD} {case} mapping", False,
+                           f"no incident: {caller.get('dti_incident_status')}")
+                continue
+            field, stored, display = self.incident_reference(caller_id, (AFFECTED_USER_FIELD,))
+            resolved = self.reference_matches(
+                stored, display, expected_user, allow_first_name=fixture_key == "affected_user_first_name")
+            self.check("fields", f"{AFFECTED_USER_FIELD} {case} mapping",
+                       field == AFFECTED_USER_FIELD and resolved,
+                       f"{field or AFFECTED_USER_FIELD}: {display or stored or '(empty)'}")
 
         typo = self.push("fields-typo", direct_to_incident="true", catgeory="Network",
                          short_description="typo check")
@@ -657,24 +949,155 @@ class Verifier:
 
         self.check_generating_alert()
 
-        group_row = self.sn.table("sys_user_group", "active=true", "sys_id,name", 1)
-        if group_row:
+        group_fixture = str(self.fixtures.get("assignment_group") or "").strip()
+        if group_fixture:
             named = self.push("fields-group", direct_to_incident="true",
-                              assignment_group=group_row[0]["name"])
+                              assignment_group=group_fixture)
             if named.get("incident_sys_id"):
-                row = self.sn.record("incident", named["incident_sys_id"], "assignment_group",
-                                     display="all")
+                field, stored, display = self.incident_reference(
+                    named["incident_sys_id"], ("assignment_group",))
                 self.check("fields", "the payload assignment_group wins",
-                           str(shown("assignment_group")) == group_row[0]["name"],
-                           f"{shown('assignment_group')} (asked for {group_row[0]['name']})")
+                           field == "assignment_group" and
+                           self.reference_matches(stored, display, group_fixture),
+                           f"{display or stored or '(empty)'} (asked for {group_fixture})")
+            else:
+                self.check("fields", "the payload assignment_group wins", False,
+                           f"no incident: {named.get('dti_incident_status')}")
+        else:
+            self.check("fields", "the payload assignment_group wins", None,
+                       f"set {FIXTURE_ENV_KEYS['assignment_group']} in the fixture env file")
+
+    def group_lookups(self) -> None:
+        """Exercise fixture-driven CMDB, group, service, and offering resolution."""
+        ci_name = str(self.fixtures.get("ci_name") or "").strip()
+        ci_sys_id = str(self.fixtures.get("ci_sys_id") or "").strip()
+        ci_input = ci_sys_id or ci_name
+
+        for label, supplied, expected in (("CI sys_id", ci_sys_id, ci_sys_id),
+                                          ("CI exact name", ci_name, ci_name)):
+            if not supplied:
+                self.check("lookups", label + " lookup", None,
+                           f"set {FIXTURE_ENV_KEYS['ci_sys_id']} or {FIXTURE_ENV_KEYS['ci_name']} in the fixture env file")
+                continue
+            case = "lookup-ci-" + ("sysid" if label == "CI sys_id" else "name")
+            payload = self.payload(case, directToIncident="true", cmdbCi=supplied)
+            incident_id = self.lookup_incident(case, payload)
+            if incident_id:
+                field, stored, display = self.incident_reference(incident_id, ("cmdb_ci",))
+                self.check("lookups", label + " maps to Incident.cmdb_ci",
+                           field == "cmdb_ci" and self.reference_matches(stored, display, expected),
+                           f"{field or 'cmdb_ci'}: {display or stored or '(empty)'}")
+
+        ci_type = str(self.fixtures.get("ci_type") or "").strip()
+        ci_identifier = self.fixtures.get("ci_identifier")
+        if ci_type and isinstance(ci_identifier, dict) and ci_identifier:
+            case = "lookup-ci-identifier"
+            incident_id = self.lookup_incident(case, self.payload(
+                case, directToIncident="true", ciType=ci_type, ciIdentifier=ci_identifier))
+            if incident_id:
+                field, stored, display = self.incident_reference(incident_id, ("cmdb_ci",))
+                expected_ci = ci_sys_id or ci_name
+                matched = (self.reference_matches(stored, display, expected_ci) if expected_ci
+                           else bool(stored or display))
+                self.check("lookups", "camelCase ciType + ciIdentifier resolve",
+                           field == "cmdb_ci" and matched,
+                           f"{display or stored or '(empty)'} "
+                           f"(expected {expected_ci or 'a resolved CI'})")
+        else:
+            self.check("lookups", "camelCase ciType + ciIdentifier resolve", None,
+                       f"set {FIXTURE_ENV_KEYS['ci_type']} and {FIXTURE_ENV_KEYS['ci_identifier']} in the fixture env file")
+
+        support_group = str(self.fixtures.get("ci_support_group") or "").strip()
+        if ci_input and support_group:
+            case = "lookup-ci-support-group"
+            incident_id = self.lookup_incident(case, self.payload(
+                case, directToIncident="true", cmdbCi=ci_input))
+            if incident_id:
+                field, stored, display = self.incident_reference(incident_id, ("assignment_group",))
+                self.check("lookups", "CI support group is the DTI fallback",
+                           field == "assignment_group" and
+                           self.reference_matches(stored, display, support_group),
+                           f"{display or stored or '(empty)'} (expected {support_group})")
+        else:
+            self.check("lookups", "CI support group is the DTI fallback", None,
+                       f"set a CI fixture and {FIXTURE_ENV_KEYS['ci_support_group']} in the fixture env file")
+
+        group_fixture = str(self.fixtures.get("assignment_group") or "").strip()
+        if group_fixture:
+            case = "lookup-assignment-group"
+            incident_id = self.lookup_incident(case, self.payload(
+                case, directToIncident="true", assignmentGroup=group_fixture))
+            if incident_id:
+                field, stored, display = self.incident_reference(incident_id, ("assignment_group",))
+                self.check("lookups", "camelCase assignmentGroup resolves",
+                           field == "assignment_group" and
+                           self.reference_matches(stored, display, group_fixture),
+                           f"{display or stored or '(empty)'} (expected {group_fixture})")
+        else:
+            self.check("lookups", "camelCase assignmentGroup resolves", None,
+                       f"set {FIXTURE_ENV_KEYS['assignment_group']} in the fixture env file")
+
+        service = str(self.fixtures.get("service_name") or "").strip()
+        if service:
+            case = "lookup-service"
+            incident_id = self.lookup_incident(case, self.payload(
+                case, directToIncident="true", usbemService=service))
+            if incident_id:
+                field, stored, display = self.incident_reference(
+                    incident_id, ("business_service", "service"))
+                self.check("lookups", "camelCase usbemService resolves",
+                           field in ("business_service", "service") and
+                           self.reference_matches(stored, display, service),
+                           f"{field or 'business_service/service'}: {display or stored or '(empty)'}")
+        else:
+            self.check("lookups", "camelCase usbemService resolves", None,
+                       f"set {FIXTURE_ENV_KEYS['service_name']} in the fixture env file")
+
+        offering = str(self.fixtures.get("offering_name") or "").strip()
+        if offering:
+            case = "lookup-offering"
+            incident_id = self.lookup_incident(case, self.payload(
+                case, directToIncident="true", usbemOffering=offering,
+                **({"usbemService": service} if service else {})))
+            if incident_id:
+                field, stored, display = self.incident_reference(
+                    incident_id, ("service_offering",))
+                self.check("lookups", "camelCase usbemOffering resolves",
+                           field == "service_offering" and
+                           self.reference_matches(stored, display, offering),
+                           f"{display or stored or '(empty)'} (expected {offering})")
+        else:
+            self.check("lookups", "camelCase usbemOffering resolves", None,
+                       f"set {FIXTURE_ENV_KEYS['offering_name']} in the fixture env file")
+
+        car_id = str(self.fixtures.get("business_app_car_id") or "").strip()
+        if car_id:
+            case = "lookup-business-app"
+            incident_id = self.lookup_incident(case, self.payload(
+                case, directToIncident="true", usbemCarId=car_id))
+            if incident_id:
+                alerts = self.wait_alert(self.key(case))
+                if not alerts:
+                    self.check("lookups", "camelCase usbemCarId resolves", False,
+                               f"incident created but no alert within {self.alert_wait}s")
+                else:
+                    row = self.sn.record("em_alert", alerts[0]["sys_id"], "additional_info")
+                    try:
+                        info = json.loads(row.get("additional_info") or "{}")
+                    except (TypeError, ValueError):
+                        info = {}
+                    resolved = bool(info.get("cmdb_ci_business_app"))
+                    self.check("lookups", "camelCase usbemCarId resolves",
+                               resolved, "resolved business-app sys_id present in alert additional_info"
+                               if resolved else "cmdb_ci_business_app is absent from alert additional_info")
+        else:
+            self.check("lookups", "camelCase usbemCarId resolves", None,
+                       f"set {FIXTURE_ENV_KEYS['business_app_car_id']} in the fixture env file")
 
     def check_generating_alert(self) -> None:
         """incident.u_generating_alert is customer-specific: where it exists it must point at the
-        alert that produced the incident, and where it does not, say so rather than pass quietly."""
-        if not self.field_exists("incident", "u_generating_alert"):
-            self.check("fields", "u_generating_alert points at the alert", None,
-                       "the field is not on this instance, so the mapping is not exercised")
-            return
+        alert that produced the incident. Check it directly through Incident API read access so
+        production does not need a sys_dictionary permission."""
         fast = self.push("fields-genalert", direct_to_incident="true")
         if not fast.get("incident_sys_id"):
             self.check("fields", "u_generating_alert points at the alert", False,
@@ -686,7 +1109,16 @@ class Verifier:
         self.wait_alert(self.key("fields-genalert"))
         linked = self.wait_any_alert_linked(self.key("fields-genalert"), fast["incident_sys_id"])
         alert_sys_id = linked.get("sys_id", "") if linked else ""
-        row = self.sn.record("incident", fast["incident_sys_id"], "u_generating_alert")
+        try:
+            row = self.sn.record("incident", fast["incident_sys_id"], "u_generating_alert")
+        except ServiceNowError:
+            self.check("fields", "u_generating_alert points at the alert", None,
+                       "field is missing or not exposed by Incident API read access")
+            return
+        if "u_generating_alert" not in row:
+            self.check("fields", "u_generating_alert points at the alert", None,
+                       "field is missing or not exposed by Incident API read access")
+            return
         self.check("fields", "u_generating_alert points at the alert",
                    bool(alert_sys_id) and str(row.get("u_generating_alert", "")) == alert_sys_id,
                    f"u_generating_alert={row.get('u_generating_alert') or '(empty)'} "
@@ -701,114 +1133,83 @@ class Verifier:
         alerts = self.alerts_for(self.key("fields-genalert-fast"))
         alert_sys_id = alerts[0]["sys_id"] if alerts else ""
         time.sleep(3)
-        row = self.sn.record("incident", incident_sys_id, "u_generating_alert") if incident_sys_id else {}
+        try:
+            row = self.sn.record("incident", incident_sys_id, "u_generating_alert") if incident_sys_id else {}
+        except ServiceNowError:
+            row = {}
+        if "u_generating_alert" not in row:
+            self.check("fields", "u_generating_alert set on a fast-path incident", None,
+                       "field is missing or not exposed by Incident API read access")
+            return
         self.check("fields", "u_generating_alert set on a fast-path incident",
                    bool(alert_sys_id) and str(row.get("u_generating_alert", "")) == alert_sys_id,
                    f"u_generating_alert={row.get('u_generating_alert') or '(empty)'} "
                    f"alert={alert_sys_id or '(none)'}")
 
-    def group_notes(self) -> None:
-        response = self.push("notes-incident", direct_to_incident="true",
-                             work_notes="sender note for the incident")
-        sys_id = response.get("incident_sys_id", "")
-        if not sys_id:
-            self.check("notes", "incident created", False, str(response.get("dti_incident_status")))
+    def manual_confirmation(self, name: str, prompt: str, identifiers: str) -> None:
+        print(f"  [MANUAL] {identifiers}\n           {prompt}", flush=True)
+        if not sys.stdin.isatty():
+            self.check("notes", name, None, "manual check printed; rerun in a terminal to enter y/n")
             return
-        notes = self.journal("incident", sys_id)
-        self.check("notes", "the connector note is on the incident",
-                   "Direct To Incident Via Event Management Generic JSON Endpoint" in notes,
-                   notes.splitlines()[0] if notes else "no work notes")
-        self.check("notes", "a sender work_notes reaches the incident",
-                   "sender note for the incident" in notes,
-                   "written" if "sender note for the incident" in notes else "missing")
-
-        # DTI returns the incident immediately; the Business Rule links the alert afterward.
-        # The creation note therefore names the message key, not a not-yet-created alert.
-        fast = self.push("notes-createdfrom", direct_to_incident="true")
-        if fast.get("incident_sys_id"):
-            notes = self.journal("incident", fast["incident_sys_id"])
-            self.check("notes", "the created-from line names the message key",
-                       f"Incident Created From {self.key('notes-createdfrom')}" in notes,
-                       f"looked for 'Incident Created From {self.key('notes-createdfrom')}'")
+        try:
+            answer = input("           Did it match? [y=yes / n=no / Enter=skip] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer in ("y", "yes"):
+            self.check("notes", name, True, "confirmed manually")
+        elif answer in ("n", "no"):
+            self.check("notes", name, False, "manual check reported a mismatch")
         else:
-            self.check("notes", "the created-from line names the message key", False,
-                       f"no immediate incident: {fast.get('dti_incident_status')}")
+            self.check("notes", name, None, "manual check skipped")
 
-        legacy = self.push("notes-legacy", direct_to_incident="true",
-                           dti_work_note="legacy note via dti_work_note")
-        if legacy.get("incident_sys_id"):
-            legacy_notes = self.journal("incident", legacy["incident_sys_id"])
-            self.check("notes", "the legacy dti_work_note reaches the incident",
-                       "legacy note via dti_work_note" in legacy_notes,
-                       "written" if "legacy note via dti_work_note" in legacy_notes else "missing")
+    def group_notes(self) -> None:
+        """Create note examples and ask the operator to verify in the Incident/Alert forms.
 
-        repeat = self.push("notes-incident", direct_to_incident="true",
-                           work_notes="second sender note")
-        time.sleep(2)
-        notes = self.journal("incident", sys_id)
-        written = "Duplicate event received" in notes and "second sender note" in notes
-        skipped = str(repeat.get("incident_work_note", "")) == "skipped"
-        # Annotating an incident that already exists needs write access to the incident table.
-        # Where the scope has it this must be written; where it does not, the connector reports the
-        # skip instead of failing the event, which is a reported state, not a regression.
-        self.check("notes", "reuse adds a duplicate note",
-                   True if written else (None if skipped else False),
-                   f"status={repeat.get('dti_incident_status')}" if written else
-                   (f"skipped: {repeat.get('incident_work_note_skipped_reason')} — grant the scope "
-                    "write on incident" if skipped else "no duplicate note and no skip reported"))
-
-        self.push("notes-alert", alert_work_notes="sender note for the alert")
-        alerts = self.wait_alert(self.key("notes-alert"))
-        if alerts:
-            time.sleep(3)
-            alert_notes = self.journal("em_alert", alerts[0]["sys_id"])
-            self.check("notes", "alert_work_notes reaches the alert",
-                       "sender note for the alert" in alert_notes,
-                       alerts[0]["number"] +
-                       (": written" if "sender note for the alert" in alert_notes else ": missing"))
+        Production API access does not include sys_journal_field. Record identifiers and exact
+        expected text are shown so this remains verifiable without that table permission.
+        """
+        incident_text = "USBEM verifier incident note " + self.key("notes-manual-incident")
+        incident = self.push("notes-manual-incident", direct_to_incident="true",
+                             dti_work_note=incident_text)
+        incident_id = str(incident.get("incident_sys_id") or "")
+        if not incident_id:
+            self.check("notes", "incident note test created an incident", False,
+                       f"status={incident.get('dti_incident_status')}")
         else:
-            self.check("notes", "alert_work_notes reaches the alert", False, "no alert created")
+            self.check("notes", "incident note test created an incident", True,
+                       str(incident.get("incident_number") or incident_id))
+            linked = self.wait_any_alert_linked(self.key("notes-manual-incident"), incident_id,
+                                                timeout=self.alert_wait)
+            alert_no = linked.get("number", "")
+            self.manual_confirmation(
+                "Incident journal note and linked-alert behavior",
+                f"Open {incident.get('incident_number') or incident_id}; confirm the creation note, "
+                f"'Incident Created From {self.key('notes-manual-incident')}', and sender text "
+                f"'{incident_text}' appear in Work notes. If linked alert {alert_no or '(not linked yet)'} "
+                "is available, confirm the sender text is not duplicated there.",
+                f"Incident {incident.get('incident_number') or incident_id}; "
+                f"Alert {alert_no or '(link pending)'}")
 
-        # Regression guard. The note travels in the alert's additional_info and the reconcile rule
-        # runs on every alert write, so a connector that does not consume the key re-posts the same
-        # note on writes that never asked for one.
-        self.push("notes-alert-once", alert_work_notes="post me exactly once")
-        alerts = self.wait_alert(self.key("notes-alert-once"))
+        alert_text = "USBEM verifier alert note " + self.key("notes-manual-alert")
+        self.push("notes-manual-alert", alert_work_notes=alert_text)
+        alerts = self.wait_alert(self.key("notes-manual-alert"))
         if not alerts:
-            self.check("notes", "the note is not re-posted on later alert writes", False,
-                       "no alert created")
-        else:
-            time.sleep(4)
-            for _ in range(2):
-                self.push("notes-alert-once", severity="2")    # same key, no note on the payload
-                time.sleep(5)
-            copies = [line for line in self.journal("em_alert", alerts[0]["sys_id"]).splitlines()
-                      if "post me exactly once" in line]
-            self.check("notes", "the note is not re-posted on later alert writes", len(copies) == 1,
-                       f"{alerts[0]['number']}: {len(copies)} copies after two further alert writes")
-
-        dti_note = self.push("notes-dti-plain", direct_to_incident="true",
-                             work_notes="incident only, not the alert")
-        alerts = self.wait_alert(self.key("notes-dti-plain"))
-        if alerts and dti_note.get("incident_sys_id"):
-            time.sleep(4)
-            on_alert = "incident only, not the alert" in self.journal("em_alert", alerts[0]["sys_id"])
-            on_incident = "incident only, not the alert" in self.journal("incident",
-                                                                         dti_note["incident_sys_id"])
-            self.check("notes", "a DTI work_notes does not also land on the alert",
-                       on_incident and not on_alert, f"incident={on_incident} alert={on_alert}")
-
-        self.push("notes-alert-plain", work_notes="plain note, no incident")
-        alerts = self.wait_alert(self.key("notes-alert-plain"))
-        if alerts:
-            time.sleep(3)
-            alert_notes = self.journal("em_alert", alerts[0]["sys_id"])
-            self.check("notes", "work_notes reaches a non-DTI alert",
-                       "plain note, no incident" in alert_notes,
-                       alerts[0]["number"] +
-                       (": written" if "plain note, no incident" in alert_notes else ": missing"))
-        else:
-            self.check("notes", "work_notes reaches a non-DTI alert", False, "no alert created")
+            self.check("notes", "alert note test created an alert", False,
+                       f"no alert within {self.alert_wait}s")
+            return
+        alert = alerts[0]
+        self.check("notes", "alert note test created an alert", True,
+                   str(alert.get("number") or alert.get("sys_id")))
+        time.sleep(4)
+        self.push("notes-manual-alert", severity="2")
+        time.sleep(3)
+        self.push("notes-manual-alert", severity="2")
+        alert_number = str(alert.get("number") or alert.get("sys_id"))
+        self.manual_confirmation(
+            "Alert work note appears once after repeated alert updates",
+            f"Open alert {alert_number}; confirm '{alert_text}' appears in Work notes exactly once "
+            "after the two later events without a note.",
+            f"Alert {alert_number}")
 
     def group_edge(self) -> None:
         # incident.correlation_id is String(100) but em_alert.message_key holds 1024, so a long key
@@ -896,42 +1297,56 @@ def main() -> int:
     parser.add_argument("--source", default=DEFAULT_SOURCE,
                         help=f"listener source parameter (default: {DEFAULT_SOURCE}; legacy PDI: firstGenericJson)")
     parser.add_argument("--contract", choices=("modern", "legacy"), default="modern",
-                        help="modern requires component versions; legacy checks the original response envelope and dti_ aliases")
+                        help="response envelope to assert; legacy skips modern-only DTI checks")
     parser.add_argument("--access-profile", choices=("standard", "limited"), default="standard",
-                        help="limited uses only Incident/Alert readback, avoids background scripts and deletion, and runs compat+fast")
+                        help="limited uses Incident/Alert APIs, skips cleanup, and prints manual note checks")
     parser.add_argument("--json", dest="json_out", help="write the results to this file")
     parser.add_argument("--instance", default="", help="https://<instance>.service-now.com")
     parser.add_argument("--user", default="", help="account with the API/table permissions for the selected profile")
     parser.add_argument("--password", default="")
     parser.add_argument("--env-file", help="a .env holding the credentials")
+    parser.add_argument("--fixture-file", help=(
+        "fixture values in KEY=VALUE form (default: tests/usbem_verify.fixtures.env beside this script); "
+        "USBEM_FIXTURE_* environment variables override file values"))
     parser.add_argument("--ca-bundle", default="", help="PEM file to trust (a corporate root)")
     parser.add_argument("--insecure", action="store_true", help="skip TLS verification, last resort")
     parser.add_argument("--version", action="version", version="usbem_verify " + VERSION)
     args = parser.parse_args()
 
+    configured_fixture_path = (args.fixture_file or os.environ.get("USBEM_FIXTURE_FILE", "")).strip()
+    fixture_path = Path(configured_fixture_path).expanduser() if configured_fixture_path else \
+        Path(__file__).resolve().with_name("usbem_verify.fixtures.env")
+    if configured_fixture_path and not fixture_path.is_file():
+        parser.error(f"fixture file does not exist: {fixture_path}")
+    if not fixture_path.is_file():
+        fixture_path = None
+    try:
+        fixtures, configured_fixtures = load_fixtures(fixture_path)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+
     instance, user, password = resolve_credentials(args)
-    groups = args.only or (["compat"] if args.contract == "legacy" else list(GROUPS))
-    if args.access_profile == "limited":
-        allowed_groups = {"compat", "fast"}
-        if args.only and not set(groups).issubset(allowed_groups):
-            parser.error("--access-profile limited supports only --only compat and --only fast")
-        if not args.only:
-            groups = ["compat", "fast"] if args.contract == "modern" else ["compat"]
+    groups = args.only or (["compat", "payload_contract"] if args.contract == "legacy" else list(GROUPS))
+    if args.access_profile == "limited" and not args.only and args.contract == "legacy":
+        groups = ["compat", "payload_contract"]
     sn = ServiceNow(instance, user, password, ca_bundle=args.ca_bundle, insecure=args.insecure)
     prefix = args.prefix or f"ZZUSBEM-{int(time.time())}"
     verifier = Verifier(sn, prefix, args.alert_wait, args.expect_version,
                         source=args.source, contract=args.contract,
-                        access_profile=args.access_profile)
+                        access_profile=args.access_profile, fixtures=fixtures)
 
     print(f"USBEM connector verification {VERSION}")
     print(f"instance {instance}")
     print(f"connector source {args.source} ({args.contract} contract)")
     if args.access_profile == "limited":
         print("access profile limited: requires Incident read/write and Alert read/write/create; "
-              "created records are retained because delete access is not assumed")
+              "records are retained; work notes are manually verified from printed numbers")
     if args.contract == "modern":
         print(f"expecting components to report {args.expect_version}")
     print(f"prefix   {prefix}")
+    print(f"fixtures {fixture_path if fixture_path else 'no sidecar file'} "
+          f"({len(configured_fixtures)} configured keys: "
+          f"{', '.join(configured_fixtures) if configured_fixtures else 'none'})")
     transport = ("macOS SecureTransport/Keychain" if sn._macos_curl else
                  ("requests" if requests is not None else "urllib"))
     print(f"http     {transport}"

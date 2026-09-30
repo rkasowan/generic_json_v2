@@ -488,22 +488,48 @@ For production credentials with Incident read/write and Alert read/write/create 
 python3 tests/usbem_verify.py --access-profile limited
 ```
 
-This profile runs only compatibility and fast DTI checks, reads incident and alert records for
-verification, never invokes Scripts - Background, and retains test records because delete access
-is not assumed. It prints the unique prefix for those records. The fast check expects the incident
-in the endpoint response first, then verifies that the Business Rule links its alert afterward.
+This profile runs all groups, verifies through Incident/Alert APIs, never invokes Scripts -
+Background, and retains test records because delete access is not assumed. It does not query
+`sys_journal_field`: `notes` prints the Incident/Alert numbers and asks for manual confirmation in
+an interactive terminal. Keep stable, non-secret instance fixtures in a sidecar env file so script
+updates do not overwrite them. Copy the template once:
 
-[tests/usbem_verify.py](tests/usbem_verify.py) is a single file with no dependencies — copy it
-anywhere and run it on a stock Python 3.9+. It drives the live endpoint the
-way a sender does, tags everything it creates with a unique prefix, deletes it afterwards, and
-exits non-zero if anything failed. Groups, selectable with `--only`:
+```bash
+cp tests/usbem_verify.fixtures.example.env tests/usbem_verify.fixtures.env
+```
+
+Fill in the values in `tests/usbem_verify.fixtures.env`; the verifier loads it automatically on every
+run, and Git ignores that filled-in file. For multiple instances, keep one fixture file per instance
+outside the repository and pass the chosen path with `--fixture-file /path/to/prod-fixtures.env`.
+You can also set individual `USBEM_FIXTURE_*` environment variables to override file values.
+Blank fixture keys are reported as skipped. The template lists CI, group, service, offering,
+business-app CAR ID, and affected-user fixtures; `USBEM_FIXTURE_CI_IDENTIFIER` is a JSON object.
+For `caller_id`, use the sys_id when available, or set `USBEM_FIXTURE_AFFECTED_USER_FIRST_NAME` to
+that instance's unique anonymized first name. The caller test verifies the returned user display
+starts with that name, so only this value needs to change when first-name anonymization changes.
+Category/subcategory defaults and overrides are tested automatically and need no fixture entry.
+
+To test the original connector response contract, point `--source` at that listener and select
+legacy mode. The old payload matrix still runs:
+
+```bash
+python3 tests/usbem_verify.py --source firstGenericJson --contract legacy --access-profile limited
+```
+
+[tests/usbem_verify.py](tests/usbem_verify.py) is a single Python file with no required packages;
+the optional fixture sidecar and template are described above. It runs on stock Python 3.9+ and
+drives the live endpoint the way a sender does, tagging every record with a unique prefix. The
+standard profile attempts cleanup; the limited production profile retains records. Any failed check
+returns a non-zero exit code. Groups, selectable with `--only`:
 
 | Group | What it proves |
 |---|---|
 | `compat` | response envelope, plain events, alerts, `records` batches, no incident without DTI, and legacy `dti_short_description` / `dti_work_note` names on the modern listener |
+| `payload_contract` | legacy nested wrappers (`event`, `payload`, `data`, `record`, `alert`), bare arrays, `events` batches, camelCase aliases, and `additionalInfo` object / JSON-string forms, verified through alert readback |
 | `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, opens a new one once it is Resolved/Closed/Canceled, and the Business Rule links the alert afterward |
-| `fields` | NetCool, category, subcategory, caller, impact/urgency, and every payload override |
-| `notes` | the connector note, the created-from line naming the message key, sender notes on the incident (including the legacy `dti_work_note`), `alert_work_notes` on the alert, a plain `work_notes` on a non-DTI alert, and that a note is not re-posted on later alert writes |
+| `fields` | default Software/Monitoring Alert category and subcategory, Hardware/Server and Software/Monitoring Alert pass-through, caller_id by configured sys_id or unique first name, impact/urgency, and other payload overrides |
+| `lookups` | configured CI name/sys_id and `ciType` + `ciIdentifier`, CI support-group fallback, named assignment group, service, offering, and optional CAR ID, verified through Incident/Alert readback |
+| `notes` | creates a DTI incident note and an alert note, then prints record numbers and exact manual checks; interactive runs collect y/n/skip, non-interactive runs report observations |
 | `edge` | message keys longer than `incident.correlation_id`, concurrent events for one key, and a batch where only one record asks for an incident |
 | `timing` | round-trip milliseconds for plain events and immediate DTI, reported as an observation |
 
