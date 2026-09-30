@@ -17,12 +17,13 @@ USBEM_DTI.prototype = {
         this.PROPERTY_DTI_MAP_TABLE = 'x_usbna_usb_event.dti_map_table';
         this.PROPERTY_DTI_MAP_PENDING_WAIT_MS = 'x_usbna_usb_event.dti_map_pending_wait_ms';
         this.PROPERTY_DTI_TERMINAL_INCIDENT_STATES = 'x_usbna_usb_event.dti_terminal_incident_states';
+        this.PROPERTY_DEFAULT_CALLER_SYS_ID = 'x_usbna_usb_event.default_caller_sys_id';
 
         this.DEFAULT_DTI_MAP_PENDING_WAIT_MS = 1500;
         this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES = '6,7,8';
         this.PENDING_MAP_POLL_MS = 100;
 
-        this.VERSION = '2026.09.28.1';
+        this.VERSION = '2026.09.30.1';
         this.COMPONENT = 'USBEM_DTI';
 
         // Field mapping inherited from the retired "EM - Generic Endpoint Create Incident"
@@ -31,7 +32,6 @@ USBEM_DTI.prototype = {
         this.PROPERTY_DTI_DUPLICATE_WORK_NOTE = 'x_usbna_usb_event.dti_duplicate_work_note';
         this.DEFAULT_INCIDENT_CATEGORY = 'Software';
         this.DEFAULT_INCIDENT_SUBCATEGORY = 'Monitoring Alert';
-        this.DEFAULT_CALLER_NAME = 'Event Management';
         this.CONNECTOR_WORK_NOTE = 'Direct To Incident Via Event Management Generic JSON Endpoint';
         this.DUPLICATE_WORK_NOTE = 'Duplicate event received via Event Management Generic JSON Endpoint';
         this.NETCOOL_TICKET_FIELD = 'u_netcool_ticket';
@@ -806,6 +806,8 @@ USBEM_DTI.prototype = {
     RESERVED_INCIDENT_FIELDS: ['sys_id', 'number', 'correlation_id', 'correlation_display',
         'work_notes', 'comments'],
 
+    USER_REFERENCE_FIELDS: ['caller_id', 'assigned_to'],
+
     /**
      * Write sender-supplied incident fields straight through, under their real names.
      * This endpoint replaces a direct write to the incident table, so a sender sets caller_id,
@@ -814,9 +816,9 @@ USBEM_DTI.prototype = {
      *
      * The source is the payload keys the connector did not consume as event fields, so standard
      * event keys (source, node, severity, description and their aliases) can never leak in. A
-     * 32-character value is written as-is; anything else goes through setDisplayValue, so
-     * "category": "Software" or "caller_id": "Abel Tuter" work as written. A name that is not a
-     * real incident field is skipped and reported rather than guessed at.
+     * 32-character value is written as-is; choice values use setDisplayValue. User references
+     * accept sys_ids or an exact full name. Names are resolved with an exact sys_user query so
+     * duplicate matches cannot silently select the wrong caller or assignee.
      */
     applyRequestedIncidentFields: function (incGr, ctx) {
         var applied = [];
@@ -824,6 +826,7 @@ USBEM_DTI.prototype = {
         var source = this.core.isObject(ctx.user_additional_info) ? ctx.user_additional_info : {};
         var field;
         var value;
+        var userResult;
 
         for (field in source) {
             if (!this.core.hasOwn(source, field)) {
@@ -843,14 +846,23 @@ USBEM_DTI.prototype = {
                 continue;
             }
             try {
-                if (this.core.looksLikeSysId(value)) {
+                if (this.USER_REFERENCE_FIELDS.indexOf(field) >= 0) {
+                    userResult = this.applyUserReferenceField(incGr, field, String(value), ctx);
+                    this.recordUserReferenceStatus(ctx, field, userResult.status);
+                    if (userResult.applied) {
+                        applied.push(field);
+                    } else {
+                        skipped.push(field);
+                    }
+                } else if (this.core.looksLikeSysId(value)) {
                     incGr.setValue(field, String(value));
+                    applied.push(field);
                 } else {
                     // Scoped GlideRecord has no setDisplayValue; the element does. This is what
-                    // resolves "Software" to a choice value and "Abel Tuter" to a user sys_id.
+                    // resolves choice labels such as "Software" to their stored choice values.
                     incGr.getElement(field).setDisplayValue(String(value));
+                    applied.push(field);
                 }
-                applied.push(field);
             } catch (eField) {
                 skipped.push(field);
             }
@@ -864,6 +876,91 @@ USBEM_DTI.prototype = {
             ctx.result.incident_fields_skipped = skipped.join(',');
             this.core.tracePush(ctx.debug, 'incident fields skipped: ' + skipped.join(','));
         }
+    },
+
+    getDefaultCallerSysId: function (trace) {
+        var sysId = this.getStringProperty(this.PROPERTY_DEFAULT_CALLER_SYS_ID, '', trace);
+        return this.core.looksLikeSysId(sysId) ? sysId : '';
+    },
+
+    findUsersByExactName: function (fullName, trace) {
+        var userGr = new GlideRecord('sys_user');
+        var matches = [];
+        this.core.bumpMetric(trace, 'query_count', 1);
+        userGr.addQuery('name', String(fullName));
+        userGr.setLimit(2);
+        userGr.query();
+        while (userGr.next()) {
+            matches.push(String(userGr.getUniqueValue() || userGr.getValue('sys_id') || ''));
+            if (matches.length === 2) {
+                break;
+            }
+        }
+        return matches;
+    },
+
+    recordUserReferenceStatus: function (ctx, field, status) {
+        var entry = field + ':' + status;
+        ctx.result.incident_user_reference_status = this.core.hasValue(
+            ctx.result.incident_user_reference_status) ?
+            ctx.result.incident_user_reference_status + ',' + entry : entry;
+    },
+
+    applyDefaultCallerSysId: function (incGr, ctx) {
+        var sysId = this.getDefaultCallerSysId(ctx.debug);
+        if (!sysId || !incGr.isValidField('caller_id')) {
+            ctx.result.incident_caller_default = sysId ? 'field_unavailable' : 'sys_id_not_configured';
+            return false;
+        }
+        incGr.setValue('caller_id', sysId);
+        ctx.result.incident_caller_default = String(incGr.getValue('caller_id') || '') === sysId ?
+            'applied' : 'unresolved';
+        return ctx.result.incident_caller_default === 'applied';
+    },
+
+    applyUserReferenceField: function (incGr, field, value, ctx) {
+        var matches;
+        var fallbackApplied;
+        var status;
+        if (this.core.looksLikeSysId(value)) {
+            incGr.setValue(field, value);
+            return { applied: String(incGr.getValue(field) || '') === value, status: 'sys_id' };
+        }
+
+        try {
+            matches = this.findUsersByExactName(value, ctx.debug);
+        } catch (eUserLookup) {
+            matches = null;
+        }
+
+        if (matches && matches.length === 1 && this.core.looksLikeSysId(matches[0])) {
+            incGr.setValue(field, matches[0]);
+            return { applied: String(incGr.getValue(field) || '') === matches[0], status: 'full_name' };
+        }
+
+        if (field === 'caller_id') {
+            fallbackApplied = this.applyDefaultCallerSysId(incGr, ctx);
+            if (matches === null) {
+                status = 'name_lookup_unavailable';
+            } else if (matches.length > 1) {
+                status = 'ambiguous_name_defaulted';
+            } else {
+                status = 'name_not_found_defaulted';
+            }
+            if (!fallbackApplied && status !== 'name_lookup_unavailable') {
+                status += '_without_default';
+            }
+            return { applied: fallbackApplied, status: status };
+        }
+
+        if (matches === null) {
+            status = 'name_lookup_unavailable_left_unassigned';
+        } else if (matches.length > 1) {
+            status = 'ambiguous_name_left_unassigned';
+        } else {
+            status = 'name_not_found_left_unassigned';
+        }
+        return { applied: false, status: status };
     },
 
     /**
@@ -966,16 +1063,13 @@ USBEM_DTI.prototype = {
             self.setChoiceLike(incGr, 'subcategory', self.DEFAULT_INCIDENT_SUBCATEGORY);
         });
 
-        // setDisplayValue resolves the user through the reference field itself. A scoped
-        // GlideRecord query against sys_user would need a cross-scope read privilege that this
-        // application does not have, and would fail the whole event rather than one field.
+        // Caller names may be ambiguous after user anonymization, so the connector uses a
+        // configured sys_id rather than a display-name lookup for its default caller.
         this.applyDefault(ctx, 'caller_id', function () {
             if (!incGr.isValidField('caller_id') || self.core.hasValue(incGr.getValue('caller_id'))) {
                 return;
             }
-            incGr.getElement('caller_id').setDisplayValue(self.DEFAULT_CALLER_NAME);
-            ctx.result.incident_caller_default = self.core.hasValue(incGr.getValue('caller_id')) ?
-                'applied' : 'unresolved';
+            self.applyDefaultCallerSysId(incGr, ctx);
         });
 
         if (!alertGr) {

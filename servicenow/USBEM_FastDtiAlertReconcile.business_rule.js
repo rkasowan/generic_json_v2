@@ -32,7 +32,7 @@
     // Version stamp, logged with every outcome. The Script Includes report their own versions in
     // the endpoint response; this rule has no response, so the log line is where its version
     // shows up. Keep it in step with the release the rest of the project is on.
-    var BR_VERSION = '2026.09.28.1';
+    var BR_VERSION = '2026.09.30.1';
     var core;
     var dti;
     var outcome;

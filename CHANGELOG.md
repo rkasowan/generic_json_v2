@@ -2,6 +2,21 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.09.30.1 - 2026-09-30
+
+- caller and assignee inputs accept sys_ids or exact full names, resolved by the scoped Script
+  Include through `sys_user`; duplicate/missing/unavailable caller names fall back to the
+  per-instance `x_usbna_usb_event.default_caller_sys_id`, while unresolved assignees stay blank
+- the verifier covers caller and assignee mapping, default caller, and an optional duplicate-name
+  fallback case by reading the created Incident; it never queries `sys_user` or
+  `sys_journal_field`
+- production verification prompts for exactly one of the four worker instances and loads only its
+  ignored OAuth/fixture env file; production profiles default to the `em_event` write + Incident
+  RW + Alert RWC path and retain created records
+- added separate blank config examples for `itsmnowDEVworker`, `itsmnowITworker`,
+  `itsmnowUATworker`, and `itsmnowworker`; the Mac verifier continues to use system curl's
+  SecureTransport/Keychain trust roots
+
 ## 2026.09.28.1 - 2026-09-28
 
 - the alert work note is posted once and never through the business rule's own `current`: the

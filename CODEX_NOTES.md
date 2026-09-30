@@ -22,6 +22,20 @@ access public. The listener and the rule are global.
 attachments: the whitepaper, the customer KB, the incident `sys_dictionary` dump, and the PNG of
 the retired `EM - Generic Endpoint Create Incident` subflow.
 
+## Release 2026.09.30.1 (2026-09-30)
+
+- sender `caller_id` / `assigned_to` accept sys_ids or exact full names. The Script Include resolves
+  names via scoped `sys_user` read; missing/ambiguous caller uses the per-instance
+  `x_usbna_usb_event.default_caller_sys_id`, while unresolved `assigned_to` stays blank for on-call.
+- production verifier menu uses exactly itsmnowDEVworker, itsmnowITworker, itsmnowUATworker, and
+  itsmnowworker. Each selection loads only `tests/instances/<name>.env`; templates are tracked and
+  filled files ignored. OAuth secrets stay local.
+- production verifier defaults to em_event W + Incident RW + Alert RWC, submits events via the
+  connector, retains records, and reads mapped users only from Incident. It never queries
+  `sys_user` or `sys_journal_field` through the API.
+- Mac HTTP calls use system curl SecureTransport/Keychain. No production instance was deployed or
+  exercised by this repo update.
+
 ## Release 2026.09.28.1 (2026-09-28)
 
 - alert work notes: posted once, through a fresh record with `setWorkflow(false)`, and the key is
@@ -42,8 +56,10 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
   fixtures from ignored `tests/usbem_verify.fixtures.env`; the tracked
   `tests/usbem_verify.fixtures.example.env` is its blank template. Alternate instance files use
   `--fixture-file`. Blank fixtures report as skipped. Field checks verify default
-  Software/Monitoring Alert and Hardware/Server overrides plus caller_id by sys_id or configured
-  unique first name (for anonymized lower instances).
+  Software/Monitoring Alert and Hardware/Server overrides plus caller_id and assigned_to by sys_id
+  or exact full name (whose first name may vary across anonymized lower instances). This release
+  adds exact `sys_user` lookup inside the Script Include; the API verifier still checks only the
+  resulting Incident reference.
   `--source firstGenericJson --contract legacy` selects the original listener's response envelope
   while still running the legacy payload matrix.
 
@@ -61,12 +77,10 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 
 ## Gotchas proven on this PDI
 
-- **Scope fencing.** `x_usbna_usb_event` needs `incident` read+create+write and `cmdb_rel_ci`
-  read; both were `requested` until 2026-09-28, when they were flipped to `allowed` (the user
-  confirmed prod gives the scope full CRU). `sys_user` read is still denied and not needed — the
-  default caller is set with `getElement('caller_id').setDisplayValue(...)` precisely to avoid
-  that query. An uncaught fencing exception returns HTTP 500 and loses the event, so every
-  cross-scope call in the DTI path stays wrapped and reports a skip.
+- **Scope fencing.** PDI had `incident` read+create+write and `cmdb_rel_ci` read flipped to
+  `allowed` on 2026-09-28. The production connector scope can also read `sys_user`; the production
+  API account cannot, so only the Script Include resolves names. An uncaught fencing exception
+  returns HTTP 500 and loses the event, so user lookup failures are caught and fall back safely.
 - **Journal fields.** `work_notes` on both `incident` and `em_alert` only accept dot assignment;
   `setValue()` is silently dropped.
 - **`u_netcool_ticket`** and **`u_generating_alert`** (reference → `em_alert`, added by the user
@@ -90,7 +104,7 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 
 ```bash
 python3 scripts/deploy_usbem.py   # deploy + read live versions back
-python3 tests/usbem_verify.py     # 9 groups, self-cleaning, one file, no dependencies
+python3 tests/usbem_verify.py     # select one production instance; limited profile retains records
 ```
 
 Last full run 2026-09-25: all groups pass; the duplicate work note reports

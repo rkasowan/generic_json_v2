@@ -123,13 +123,14 @@ script costs one query and writes nothing.
 
 ## 6. Properties [verified]
 
-Create in the `x_usbna_usb_event` scope. All are optional — the code has the same defaults — but
-creating them makes the behaviour visible and tunable.
+Create in the `x_usbna_usb_event` scope. Most are optional because the code has defaults. Set
+`default_caller_sys_id` separately in each instance so the caller fallback is explicit and stable.
 
 | Property | Value | Purpose |
 |---|---|---|
 | `x_usbna_usb_event.dti_terminal_incident_states` | `6,7,8` | states that end incident reuse for a message key. Integers only; anything else falls back to the default and logs a warning. Set to `0` as a kill switch to restore pre-fix reuse |
 | `x_usbna_usb_event.dti_duplicate_work_note` | `true` | add a work note to an incident an event was folded into. `false` turns it off |
+| `x_usbna_usb_event.default_caller_sys_id` | a valid `sys_user.sys_id` | caller fallback when `caller_id` is omitted or an exact full-name lookup is missing, ambiguous, or unavailable; configure per instance |
 | `x_usbna_usb_event.default_cmdb_ci_sys_id` | optional | fallback CI when none resolves. Point it at a real CI or leave it unset; dev382837's value does not resolve |
 | `x_usbna_usb_event.dti_map_table` | leave blank | the map-table code is inert and expects `u_*` fields that do not exist. Leave it empty |
 
@@ -167,7 +168,7 @@ that none of them costs an event:
 | `incident` | read, create, **write** | without write: the duplicate work note on a reused incident, and `u_generating_alert` written after creation. Both report a skip on the response rather than failing the event |
 | `cmdb_rel_ci` | read | without it, any event resolving to a real CI throws `ScopeAccessNotGrantedException` before the assignment-group logic runs, so CI-derived groups never take effect |
 | `cmdb_ci`, `cmdb_ci_service`, `service_offering`, `sys_user_group` | read | CI, service, offering and group resolution |
-| `sys_user` | read | nothing: the default caller is set through the reference field rather than a query, precisely so this privilege is not needed |
+| `sys_user` | read | exact full-name resolution for `caller_id` and `assigned_to`, including duplicate detection. The production connector scope already has this access; the API verifier does not query this table |
 
 Grant them in **System Applications > Application Cross-Scope Access**. ServiceNow usually creates
 the row on `sys_scope_privilege` the first time a call is denied, with status `requested`, so the
@@ -191,9 +192,11 @@ Then verify behaviour end to end:
 python3 tests/usbem_verify.py
 ```
 
-Self-cleaning, exit code 0 when everything passed. `--only deploy` is the fastest confidence
-check: it compares every record on the instance with the file in this repo and confirms the
-endpoint reports this release's version for all five components.
+For the four production profiles, verification defaults to limited access: it submits events,
+checks Incident/Alert readback, and retains tagged records. Custom targets use the standard
+self-cleaning profile unless `--access-profile limited` is selected. To check source drift before
+deployment, use `python3 scripts/deploy_usbem.py --dry-run`; the verifier's `compat` group checks
+the endpoint's reported component versions.
 
 Quick manual smoke test:
 

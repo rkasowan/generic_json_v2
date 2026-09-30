@@ -6,3 +6,4 @@ __pycache__/
 .venv/
 venv/
 tests/usbem_verify.fixtures.env
+tests/instances/*.env

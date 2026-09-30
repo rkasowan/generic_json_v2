@@ -1,6 +1,6 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.09.25.3`
+Repo version: `2026.09.30.1`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
 Every script in this project carries that version, and the endpoint reports all of them in every
@@ -8,13 +8,13 @@ response under `versions`, so you can tell what an instance is actually running 
 single record:
 
 ```json
-"version": "2026.09.25.3",
-"versions": {"listener": "2026.09.25.3", "core": "2026.09.25.3",
-             "lookups": "2026.09.25.3", "debug": "2026.09.25.3", "dti": "2026.09.25.3"}
+"version": "2026.09.30.1",
+"versions": {"listener": "2026.09.30.1", "core": "2026.09.30.1",
+             "lookups": "2026.09.30.1", "debug": "2026.09.30.1", "dti": "2026.09.30.1"}
 ```
 
 The business rule has no response to report into, so it logs its version with every outcome
-(`USBEM fast DTI alert reconcile [v2026.09.25.3] outcome: ...`).
+(`USBEM fast DTI alert reconcile [v2026.09.30.1] outcome: ...`).
 
 The repo release version is separate from the locked standalone ServiceNow transform in
 `standalone/genericMappedJson_transform.js`, which remains `2026-03-18a` for the final path.
@@ -169,7 +169,7 @@ you want the alert identifiers back in the same response.
 ### Incident fields
 
 The endpoint replaces a direct write to the incident table, so send incident fields under their
-real names and they are written as-is:
+real names; choice and reference fields are mapped to their stored values:
 
 ```json
 {
@@ -183,8 +183,8 @@ real names and they are written as-is:
 
 - any field that exists on `incident` is accepted; `sys_id`, `number`, `correlation_id` and
   `correlation_display` are owned by the connector and ignored
-- a 32-character value is used as a sys_id, anything else is resolved as a display value, so
-  `"category": "Software"` and `"caller_id": "Abel Tuter"` both work
+- a 32-character value is used as a sys_id; choice fields resolve display values, and `caller_id`
+  / `assigned_to` accept a sys_id or exact full name
 - what was applied and what was ignored comes back as `incident_fields_applied` and
   `incident_fields_skipped`
 - `work_notes` goes on the incident, `alert_work_notes` on the alert; the legacy
@@ -200,15 +200,18 @@ endpoint replaced. They are applied before the payload, so anything you send ove
 | `u_netcool_ticket` | `true` | on every incident this connector creates; skipped where the field does not exist |
 | `category` | `Software` | |
 | `subcategory` | `Monitoring Alert` | |
-| `caller_id` | user `Event Management` | resolved through the reference field, so no sys_id is baked in |
+| `caller_id` | `x_usbna_usb_event.default_caller_sys_id` | per-instance sys_id used when omitted or when a supplied full name is missing, ambiguous, or cannot be looked up |
 | `impact` / `urgency` | from the severity map | severity 1 and 2 give 2/2, which is what the subflow's "Create P2 Incident" step set |
 | `u_generating_alert` | the alert | written when the alert exists: at creation in wait mode, at link time on the fast path |
 | `assignment_group` | the alert's group | last resort only, after the payload group and the CI support tiers |
 | `work_notes` | `Direct To Incident Via Event Management Generic JSON Endpoint` + `Incident Created From <alert or message key>` | your own note is appended to it |
 
-An instance can refuse any of these — a scoped app is not always granted read on `sys_user` or
-write on `incident`. A refusal costs that one field, never the event: the names come back in
-`incident_defaults_skipped` and the incident is still created and returned.
+For `caller_id` and `assigned_to`, send a sys_id or an exact full name. Full names are resolved
+inside the scoped Script Include through an exact `sys_user.name` query, so the scope needs
+`sys_user` read. A missing, ambiguous, or unavailable caller lookup uses the configured default
+caller sys_id; an unresolved `assigned_to` is left blank so on-call assignment can populate it.
+The API verifier does not query `sys_user`; it checks the resulting references through Incident
+readback. A denied scoped lookup costs that reference value, never the event.
 
 When an event reuses an existing incident instead of creating one, the connector adds
 `Duplicate event received via Event Management Generic JSON Endpoint (<message key>)`, as the
@@ -474,7 +477,7 @@ on the PDI the original listener is `firstGenericJson` and predates the modern D
 fields:
 
 ```bash
-python3 tests/usbem_verify.py --source firstGenericJson --contract legacy --only compat
+python3 tests/usbem_verify.py --source firstGenericJson --contract legacy
 ```
 
 Legacy mode verifies the original event response envelope, event creation, alert creation,
@@ -482,32 +485,33 @@ no-incident behavior without DTI, and `records` batching. It does not require th
 component `versions` block or DTI result fields. The default modern compatibility group also
 checks the old `dti_short_description` and `dti_work_note` aliases against the current listener.
 
-For production credentials with Incident read/write and Alert read/write/create only, use:
+With no `--instance`, the verifier prompts for one of the four production instances and loads only
+that instance's local config. Set up each config once by copying its example:
 
 ```bash
-python3 tests/usbem_verify.py --access-profile limited
+cp tests/instances/itsmnowDEVworker.env.example tests/instances/itsmnowDEVworker.env
+cp tests/instances/itsmnowITworker.env.example tests/instances/itsmnowITworker.env
+cp tests/instances/itsmnowUATworker.env.example tests/instances/itsmnowUATworker.env
+cp tests/instances/itsmnowworker.env.example tests/instances/itsmnowworker.env
 ```
 
-This profile runs all groups, verifies through Incident/Alert APIs, never invokes Scripts -
-Background, and retains test records because delete access is not assumed. It does not query
-`sys_journal_field`: `notes` prints the Incident/Alert numbers and asks for manual confirmation in
-an interactive terminal. Keep stable, non-secret instance fixtures in a sidecar env file so script
-updates do not overwrite them. Copy the template once:
+Each file holds that instance's OAuth client ID/secret and fixtures. The filled-in files are
+ignored by Git. The OAuth application's user must have the production API permissions in use here:
+the limited profile submits events through the connector (`em_event` write), reads and updates
+Incident, and reads/creates/updates Alert. It defaults on for the four production profiles, skips cleanup, never invokes Scripts -
+Background, and retains tagged test records. It does not query `sys_user` or `sys_journal_field`:
+the `notes` group prints Incident/Alert numbers and prompts for manual confirmation in a terminal.
 
-```bash
-cp tests/usbem_verify.fixtures.example.env tests/usbem_verify.fixtures.env
-```
-
-Fill in the values in `tests/usbem_verify.fixtures.env`; the verifier loads it automatically on every
-run, and Git ignores that filled-in file. For multiple instances, keep one fixture file per instance
-outside the repository and pass the chosen path with `--fixture-file /path/to/prod-fixtures.env`.
-You can also set individual `USBEM_FIXTURE_*` environment variables to override file values.
-Blank fixture keys are reported as skipped. The template lists CI, group, service, offering,
-business-app CAR ID, and affected-user fixtures; `USBEM_FIXTURE_CI_IDENTIFIER` is a JSON object.
-For `caller_id`, use the sys_id when available, or set `USBEM_FIXTURE_AFFECTED_USER_FIRST_NAME` to
-that instance's unique anonymized first name. The caller test verifies the returned user display
-starts with that name, so only this value needs to change when first-name anonymization changes.
-Category/subcategory defaults and overrides are tested automatically and need no fixture entry.
+Fill each selected instance's `tests/instances/<name>.env` once and update only that file when its
+OAuth credentials or anonymized first names change. Each has separate caller fixtures. For a custom
+target such as a PDI, Basic credentials still come from `--user` / `--password` or `--env-file`; its
+fixture sidecar is `tests/usbem_verify.fixtures.env` (copy
+`tests/usbem_verify.fixtures.example.env`). `USBEM_FIXTURE_*` environment variables override file
+values. Blank fixture keys report as skipped. `USBEM_FIXTURE_CI_IDENTIFIER` is a JSON object.
+Caller and assignee fixture values may be sys_ids or exact full names; a caller's first name may
+differ across instances. Set the expected sys_id alongside a full name when possible; the verifier
+can then compare the stored Incident reference without needing an API display value. Category and
+subcategory defaults and overrides are tested automatically.
 
 To test the original connector response contract, point `--source` at that listener and select
 legacy mode. The old payload matrix still runs:
@@ -527,7 +531,7 @@ returns a non-zero exit code. Groups, selectable with `--only`:
 | `compat` | response envelope, plain events, alerts, `records` batches, no incident without DTI, and legacy `dti_short_description` / `dti_work_note` names on the modern listener |
 | `payload_contract` | legacy nested wrappers (`event`, `payload`, `data`, `record`, `alert`), bare arrays, `events` batches, camelCase aliases, and `additionalInfo` object / JSON-string forms, verified through alert readback |
 | `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, opens a new one once it is Resolved/Closed/Canceled, and the Business Rule links the alert afterward |
-| `fields` | default Software/Monitoring Alert category and subcategory, Hardware/Server and Software/Monitoring Alert pass-through, caller_id by configured sys_id or unique first name, impact/urgency, and other payload overrides |
+| `fields` | default Software/Monitoring Alert category and subcategory, Hardware/Server and Software/Monitoring Alert pass-through, caller_id and assigned_to by configured sys_id or full name, impact/urgency, and other payload overrides |
 | `lookups` | configured CI name/sys_id and `ciType` + `ciIdentifier`, CI support-group fallback, named assignment group, service, offering, and optional CAR ID, verified through Incident/Alert readback |
 | `notes` | creates a DTI incident note and an alert note, then prints record numbers and exact manual checks; interactive runs collect y/n/skip, non-interactive runs report observations |
 | `edge` | message keys longer than `incident.correlation_id`, concurrent events for one key, and a batch where only one record asks for an incident |
@@ -538,9 +542,12 @@ returns a non-zero exit code. Groups, selectable with `--only`:
 skipped when the caller cannot change the incident state. No admin background-script access is
 used.
 
-Credentials come from `--instance/--user/--password`, from the environment
-(`servicenow_instance` / `servicenow_user` / `servicenow_password`), or from a `.env` — the one
-named by `--env-file`, or the nearest one at or above the working directory.
+Production OAuth credentials come from the selected ignored
+`tests/instances/<name>.env`; optional environment overrides use the selected instance prefix,
+such as `USBEM_ITSMNOWDEVWORKER_OAUTH_CLIENT_SECRET`. Custom-target
+credentials use `--instance` for the custom target and come from `--user/--password`, the
+environment (`servicenow_user` / `servicenow_password`), or a `.env` — the one named by
+`--env-file`, or the nearest one at or above the working directory.
 
 **TLS.** Certificates are verified. The verifier uses macOS `/usr/bin/curl` when it is built
 with Apple SecureTransport, so venv runs trust the local macOS Keychain roots. On other systems
@@ -554,8 +561,9 @@ repo.
 ## Known gaps
 
 - **The scope needs its cross-scope privileges.** `x_usbna_usb_event` runs with
-  `runtime_access_tracking = enforcing`, so it needs `incident` read+create+**write** and
-  `cmdb_rel_ci` read. Without the incident write, annotating an incident that already exists (the
+  `runtime_access_tracking = enforcing`, so it needs `incident` read+create+**write**, `sys_user`
+  read for exact full-name caller/assignee resolution, and `cmdb_rel_ci` read. Without the incident
+  write, annotating an incident that already exists (the
   duplicate work note) and writing `u_generating_alert` after creation are skipped and reported
   rather than done. Without `cmdb_rel_ci` read, any event resolving to a real CI throws
   `ScopeAccessNotGrantedException` before the support-group logic runs. Both are granted on

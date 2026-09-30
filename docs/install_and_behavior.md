@@ -72,13 +72,16 @@ For synchronous incident creation:
 - event `description` populates incident `description`
 
 The `genericJsonV2` path adds two things on top. Any field that exists on `incident` can be sent
-under its real name (`category`, `caller_id`, `contact_type`, ...) and is written as-is, and the
+under its real name (`category`, `caller_id`, `contact_type`, ...) and is mapped to its stored
+choice/reference value where needed, and the
 connector first applies the defaults the retired **EM - Generic Endpoint Create Incident** subflow
 used to apply — `u_netcool_ticket = true`, category `Software`, subcategory `Monitoring Alert`,
-caller `Event Management`, the alert in `u_generating_alert`, and a work note reading
+the configured `x_usbna_usb_event.default_caller_sys_id`, the alert in `u_generating_alert`, and a work note reading
 `Direct To Incident Via Event Management Generic JSON Endpoint` followed by
 `Incident Created From <alert number>`. Payload values override every one of them. See the README
-for the full table.
+for the full table. User references accept sys_ids or exact full names. The scoped Script Include
+looks up full names in `sys_user`; duplicate or unresolved `caller_id` names use the configured
+default caller sys_id, while unresolved `assigned_to` remains blank for on-call assignment.
 
 If `direct_to_incident=true` and `dti_short_description` is omitted, the transform auto-fills `dti_short_description` from event `description`. This enables a minimal DTI payload that stays close to the standard event payload.
 

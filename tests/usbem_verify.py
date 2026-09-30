@@ -5,21 +5,22 @@ Tests the inbound event API and nothing else. It writes only uniquely tagged eve
 and incidents. Standard profile attempts cleanup; limited production profile retains its records
 because the caller may not have delete access. It does not modify CMDB records or configuration.
 
-Copy this file anywhere and run it. It uses Python's standard library. On macOS it uses
-`/usr/bin/curl` with Apple SecureTransport so a venv honors the local Keychain trust roots;
+The script uses Python's standard library. The production menu expects config files under
+`tests/instances/`; a custom target can use `--instance` and the usual `.env` credentials. On
+macOS, it uses `/usr/bin/curl` with Apple SecureTransport when available so a venv honors local
+Keychain trust roots;
 elsewhere it uses `requests` when installed and otherwise Python's verified TLS defaults.
 
     python3 usbem_verify.py --instance https://xxx.service-now.com --user admin --password '...'
     python3 usbem_verify.py --only fast --only notes
-    python3 usbem_verify.py --source firstGenericJson --contract legacy --only compat
+    python3 usbem_verify.py --source firstGenericJson --contract legacy
     python3 usbem_verify.py --access-profile limited
     python3 usbem_verify.py --keep                # leave the records it creates
     python3 usbem_verify.py --json out.json       # machine-readable results
 
-Credentials, in order of preference: --instance/--user/--password; the environment
-(servicenow_instance / servicenow_user / servicenow_password, or SN_INSTANCE_URL / SN_USERNAME
-/ SN_PASSWORD); a .env named by --env-file, or the nearest one at or above the working
-directory.
+With no --instance, the verifier prompts you to choose one of the four production instances.
+Each choice loads its own ignored tests/instances/<name>.env file, including that instance's
+OAuth client credentials and fixtures. Use --instance for a one-off target such as a PDI.
 
 Terminal incident transitions use only the caller's Incident API access. If an ACL blocks a
 transition, that state case is reported as skipped; the verifier never uses Scripts - Background.
@@ -28,17 +29,18 @@ TLS: certificates are verified. If you see CERTIFICATE_VERIFY_FAILED, either
 `pip install certifi`, or pass --ca-bundle /path/root.pem for a corporate root, or --insecure.
 
 Use --source to select a different push connector. For the original PDI listener, run
-`--source firstGenericJson --contract legacy --only compat`. Production instances can use the
+`--source firstGenericJson --contract legacy`. Production instances can use the
 same command with their original listener source value. The default source is `genericJsonV2`.
 
-For restricted production users, `--access-profile limited` runs every check that can use the
-connector plus Incident/Alert readback. Fixture values load from `usbem_verify.fixtures.env` beside
+For restricted production users, `--access-profile limited` submits events through the connector
+and verifies through Incident/Alert readback. Fixture values load from `usbem_verify.fixtures.env` beside
 this script, or from `--fixture-file`; blank values make only their fixture-driven checks report as
 skipped. The notes group prints record numbers and prompts for manual checks without querying
 `sys_journal_field`. The profile avoids Scripts - Background and deletion, and retains created records.
 
 GROUPS (--only <name>, repeatable):
-    compat   response envelope, event row, alert, no incident without DTI, batches, and the
+    compat   response envelope, event acceptance (plus event-row readback in standard mode),
+             alert, no incident without DTI, batches, and the
              modern listener's legacy dti_ field aliases; legacy mode tests original event/batch
              compatibility without modern-only DTI assertions
     payload_contract old payload containers, camelCase aliases, and both additional_info forms;
@@ -73,12 +75,18 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-VERSION = "2026.09.28.1"
-EXPECTED_RELEASE = "2026.09.28.1"      # what the live endpoint should report; --expect-version overrides
+VERSION = "2026.09.30.1"
+EXPECTED_RELEASE = "2026.09.30.1"      # what the live endpoint should report; --expect-version overrides
 
 TERMINAL_STATES = (("6", "Resolved"), ("7", "Closed"), ("8", "Canceled"))
 GROUPS = ("compat", "payload_contract", "fast", "fields", "lookups", "notes", "edge", "timing")
 DEFAULT_SOURCE = "genericJsonV2"
+PRODUCTION_INSTANCES = (
+    ("itsmnowDEVworker", "https://itsmnowDEVworker.service-now.com"),
+    ("itsmnowITworker", "https://itsmnowITworker.service-now.com"),
+    ("itsmnowUATworker", "https://itsmnowUATworker.service-now.com"),
+    ("itsmnowworker", "https://itsmnowworker.service-now.com"),
+)
 
 # Fixture values are kept outside this script so script updates preserve per-instance setup.
 FIXTURE_ENV_KEYS = {
@@ -91,12 +99,13 @@ FIXTURE_ENV_KEYS = {
     "service_name": "USBEM_FIXTURE_SERVICE_NAME",
     "offering_name": "USBEM_FIXTURE_OFFERING_NAME",
     "business_app_car_id": "USBEM_FIXTURE_BUSINESS_APP_CAR_ID",
-    "affected_user_sys_id": "USBEM_FIXTURE_AFFECTED_USER_SYS_ID",
-    "affected_user_first_name": "USBEM_FIXTURE_AFFECTED_USER_FIRST_NAME",
+    "caller_sys_id": "USBEM_FIXTURE_CALLER_SYS_ID",
+    "caller_full_name": "USBEM_FIXTURE_CALLER_FULL_NAME",
+    "assigned_to_sys_id": "USBEM_FIXTURE_ASSIGNED_TO_SYS_ID",
+    "assigned_to_full_name": "USBEM_FIXTURE_ASSIGNED_TO_FULL_NAME",
+    "default_caller_sys_id": "USBEM_FIXTURE_DEFAULT_CALLER_SYS_ID",
+    "ambiguous_caller_full_name": "USBEM_FIXTURE_AMBIGUOUS_CALLER_FULL_NAME",
 }
-AFFECTED_USER_FIELD = "caller_id"          # standard Incident affected end-user field
-
-INSTANCE_KEYS = ("servicenow_instance", "SN_INSTANCE_URL", "SN_INSTANCE", "instance")
 USER_KEYS = ("servicenow_user", "SN_USERNAME", "SN_USER", "user")
 PASSWORD_KEYS = ("servicenow_password", "SN_PASSWORD", "password")
 
@@ -123,14 +132,19 @@ def parse_env_file(path: Path) -> dict:
     return values
 
 
-def load_fixtures(path=None) -> tuple[dict, list[str]]:
+def load_fixtures(path=None, values=None, instance_name="") -> tuple[dict, list[str]]:
     """Load non-secret fixture values from a sidecar env file and/or the environment."""
-    values = parse_env_file(path) if path is not None else {}
+    merged_values = dict(values or {})
+    if path is not None:
+        merged_values.update(parse_env_file(path))
     fixtures = {key: "" for key in FIXTURE_ENV_KEYS}
     fixtures["ci_identifier"] = {}
     configured = []
+    slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
     for name, env_key in FIXTURE_ENV_KEYS.items():
-        raw = os.environ.get(env_key, values.get(env_key, "")).strip()
+        override_key = (f"USBEM_{slug}_{env_key.removeprefix('USBEM_')}"
+                        if instance_name else env_key)
+        raw = (os.environ.get(override_key) or merged_values.get(env_key, "")).strip()
         if not raw:
             continue
         if name == "ci_identifier":
@@ -155,18 +169,74 @@ def nearest_env_file(start: Path) -> dict:
     return {}
 
 
-def resolve_credentials(args) -> tuple:
-    sources = []
-    if args.instance and args.user and args.password:
-        return args.instance.rstrip("/"), args.user, args.password
-    sources.append(dict(os.environ))
+def select_instance(requested: str) -> tuple[str, str]:
+    """Prompt for a known production target, or normalize an explicit instance URL/name."""
+    if not requested:
+        if not sys.stdin.isatty():
+            raise ValueError("choose an instance interactively or pass --instance")
+        print("Select the ServiceNow instance to test:")
+        for index, (name, _) in enumerate(PRODUCTION_INSTANCES, start=1):
+            print(f"  {index}. {name}")
+        choice = input("Instance [1-4]: ").strip()
+        if not choice.isdigit() or not 1 <= int(choice) <= len(PRODUCTION_INSTANCES):
+            raise ValueError("enter a number from 1 to 4")
+        return PRODUCTION_INSTANCES[int(choice) - 1]
+
+    value = requested.strip()
+    candidate_url = value if value.lower().startswith(("http://", "https://")) else "https://" + value
+    requested_host = (urllib.parse.urlparse(candidate_url).hostname or "").casefold()
+    for name, url in PRODUCTION_INSTANCES:
+        known_host = urllib.parse.urlparse(url).hostname or ""
+        if value.casefold() == name.casefold() or requested_host == known_host.casefold():
+            return name, url
+    return "", candidate_url.rstrip("/")
+
+
+def resolve_credentials(args, instance: str, instance_name: str = "", instance_values=None) -> dict:
+    """Resolve one selected instance's OAuth credentials, or Basic auth for a custom target."""
+    instance_values = instance_values or {}
+    if instance_name and (args.user or args.password):
+        sys.exit("the four production profiles use their per-instance OAuth credentials; "
+                 "remove --user/--password")
+    if args.user or args.password:
+        if not args.user or not args.password:
+            sys.exit("Basic auth requires both --user and --password")
+        return {"mode": "basic", "user": args.user, "password": args.password}
+
+    explicit_values = {}
     if args.env_file:
         named = Path(args.env_file).expanduser()
         if not named.is_file():
             sys.exit(f"--env-file {named} does not exist")
-        sources.append(parse_env_file(named))
-    sources.append(nearest_env_file(Path.cwd()))
-    sources.append(nearest_env_file(Path(__file__).resolve().parent))
+        explicit_values = parse_env_file(named)
+
+    env_values = dict(os.environ)
+    if instance_name:
+        slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
+        oauth_id = (instance_values.get("USBEM_OAUTH_CLIENT_ID") or
+                    env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID", ""))
+        oauth_secret = (instance_values.get("USBEM_OAUTH_CLIENT_SECRET") or
+                        env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET", ""))
+        oauth_scope = (instance_values.get("USBEM_OAUTH_SCOPE") or
+                       env_values.get(f"USBEM_{slug}_OAUTH_SCOPE", ""))
+        if not oauth_id or not oauth_secret:
+            sys.exit(f"OAuth client ID/secret are missing for {instance_name}; fill "
+                     f"tests/instances/{instance_name}.env")
+        return {"mode": "oauth", "client_id": oauth_id,
+                "client_secret": oauth_secret, "scope": oauth_scope}
+
+    oauth_id = explicit_values.get("USBEM_OAUTH_CLIENT_ID") or env_values.get("USBEM_OAUTH_CLIENT_ID", "")
+    oauth_secret = explicit_values.get("USBEM_OAUTH_CLIENT_SECRET") or env_values.get("USBEM_OAUTH_CLIENT_SECRET", "")
+    oauth_scope = explicit_values.get("USBEM_OAUTH_SCOPE") or env_values.get("USBEM_OAUTH_SCOPE", "")
+    if oauth_id or oauth_secret:
+        if not oauth_id or not oauth_secret:
+            sys.exit("OAuth authentication requires USBEM_OAUTH_CLIENT_ID and "
+                     "USBEM_OAUTH_CLIENT_SECRET")
+        return {"mode": "oauth", "client_id": oauth_id,
+                "client_secret": oauth_secret, "scope": oauth_scope}
+
+    sources = [explicit_values, env_values, nearest_env_file(Path.cwd()),
+               nearest_env_file(Path(__file__).resolve().parent)]
 
     def first(keys, override):
         if override:
@@ -177,18 +247,15 @@ def resolve_credentials(args) -> tuple:
                     return source[key]
         return ""
 
-    instance = first(INSTANCE_KEYS, args.instance).rstrip("/")
     user = first(USER_KEYS, args.user)
     password = first(PASSWORD_KEYS, args.password)
     missing = [name for name, value in
-               (("instance", instance), ("user", user), ("password", password)) if not value]
+               (("user", user), ("password", password)) if not value]
     if missing:
         sys.exit("missing credentials: " + ", ".join(missing) + "\n"
-                 "  pass --instance/--user/--password, set servicenow_instance / servicenow_user /\n"
-                 "  servicenow_password in the environment, or point --env-file at a .env")
-    if not instance.startswith("http"):
-        instance = "https://" + instance
-    return instance, user, password
+                 "  pass --user/--password, set servicenow_user / servicenow_password,\n"
+                 "  or point --env-file at a credentials file")
+    return {"mode": "basic", "user": user, "password": password}
 
 
 # --------------------------------------------------------------------------------- HTTP client
@@ -197,13 +264,20 @@ class ServiceNowError(RuntimeError):
 
 
 class ServiceNow:
-    """Table API, the inbound event endpoint, and a background-script runner."""
+    """Table API and inbound-event endpoint client."""
 
-    def __init__(self, instance: str, user: str, password: str,
+    def __init__(self, instance: str, auth: dict,
                  ca_bundle: str = "", insecure: bool = False, timeout: int = 180) -> None:
         self.instance = instance
-        self.user = user
-        self.password = password
+        self.auth = dict(auth)
+        self.auth_mode = self.auth.get("mode", "basic")
+        self.user = self.auth.get("user", "")
+        self.password = self.auth.get("password", "")
+        self.oauth_client_id = self.auth.get("client_id", "")
+        self.oauth_client_secret = self.auth.get("client_secret", "")
+        self.oauth_scope = self.auth.get("scope", "")
+        self._access_token = ""
+        self._access_token_expires_at = 0
         self.timeout = timeout
         self.insecure = insecure
         self.ca_bundle = ca_bundle
@@ -212,7 +286,6 @@ class ServiceNow:
         self._macos_curl = self._system_curl_uses_secure_transport()
         if requests is not None and not self._macos_curl:
             self._session = requests.Session()
-            self._session.auth = (user, password)
             self._session.verify = False if insecure else (ca_bundle or (certifi.where() if certifi else True))
             if insecure:
                 try:
@@ -220,8 +293,12 @@ class ServiceNow:
                     urllib3.disable_warnings()
                 except Exception:
                     pass
-        token = base64.b64encode(f"{user}:{password}".encode()).decode()
-        self._basic = "Basic " + token
+        if self.auth_mode == "basic":
+            token = base64.b64encode(f"{self.user}:{self.password}".encode()).decode()
+            self._basic = "Basic " + token
+        else:
+            self._basic = ""
+            self._ensure_oauth_token()
 
     @staticmethod
     def _system_curl_uses_secure_transport() -> bool:
@@ -246,7 +323,6 @@ class ServiceNow:
     def _request_with_macos_curl(self, method: str, url: str, data, headers):
         """Call system curl through stdin config; SecureTransport reads macOS Keychain roots."""
         config = [
-            "user = " + self._curl_config_value(self.user + ":" + self.password),
             "request = " + self._curl_config_value(method),
             "url = " + self._curl_config_value(url),
         ]
@@ -295,15 +371,49 @@ class ServiceNow:
         return ssl.create_default_context()
 
     # ---- one request, either transport
-    def _request(self, method: str, url: str, params=None, body=None, headers=None):
+    def _ensure_oauth_token(self):
+        if self.auth_mode != "oauth":
+            return
+        if self._access_token and time.time() < self._access_token_expires_at - 60:
+            return
+        form = {
+            "grant_type": "client_credentials",
+            "client_id": self.oauth_client_id,
+            "client_secret": self.oauth_client_secret,
+        }
+        if self.oauth_scope:
+            form["scope"] = self.oauth_scope
+        token_response = self._request(
+            "POST", f"{self.instance}/oauth_token.do", form=form, token_request=True)
+        if not isinstance(token_response, dict) or not token_response.get("access_token"):
+            raise ServiceNowError("OAuth token response did not contain an access_token")
+        try:
+            expires_in = int(token_response.get("expires_in", 1800))
+        except (TypeError, ValueError):
+            expires_in = 1800
+        self._access_token = str(token_response["access_token"])
+        self._access_token_expires_at = time.time() + max(60, expires_in)
+
+    def _request(self, method: str, url: str, params=None, body=None, headers=None,
+                 form=None, token_request: bool = False):
         headers = dict(headers or {})
         headers.setdefault("Accept", "application/json")
         if params:
             url = url + "?" + urllib.parse.urlencode(params)
         data = None
-        if body is not None:
+        if form is not None:
+            data = urllib.parse.urlencode(form).encode("utf-8")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        elif body is not None:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
+
+        if not token_request:
+            if self.auth_mode == "oauth":
+                self._ensure_oauth_token()
+                headers["Authorization"] = "Bearer " + self._access_token
+            else:
+                headers["Authorization"] = self._basic
 
         last = None
         for attempt in range(3):
@@ -315,11 +425,16 @@ class ServiceNow:
                                                      timeout=self.timeout)
                     status, text = response.status_code, response.text
                 else:
-                    headers["Authorization"] = self._basic
                     request = urllib.request.Request(url, data=data, method=method, headers=headers)
                     with urllib.request.urlopen(request, timeout=self.timeout,
                                                 context=self.context) as raw:
                         status, text = raw.status, raw.read().decode("utf-8", "replace")
+                if status == 401 and self.auth_mode == "oauth" and not token_request and attempt == 0:
+                    self._access_token = ""
+                    self._access_token_expires_at = 0
+                    self._ensure_oauth_token()
+                    headers["Authorization"] = "Bearer " + self._access_token
+                    continue
                 break
             except urllib.error.HTTPError as error:
                 status = error.code
@@ -347,6 +462,8 @@ class ServiceNow:
             raise ServiceNowError(f"{method} {url} failed after 3 attempts: {last}")
 
         if status >= 400:
+            if token_request:
+                raise ServiceNowError(f"OAuth token request failed (HTTP {status})")
             raise ServiceNowError(f"{method} {url} -> HTTP {status}: {text[:400]}")
         if not text.strip():
             return None
@@ -859,8 +976,33 @@ class Verifier:
                    str(shown("category")).lower() == "software", str(shown("category")))
         self.check("fields", "subcategory defaults to Monitoring Alert",
                    str(shown("subcategory")).lower() == "monitoring alert", str(shown("subcategory")))
-        self.check("fields", "caller defaults to Event Management",
-                   "event management" in str(shown("caller_id")).lower(), str(shown("caller_id")))
+        expected_default_caller = str(self.fixtures.get("default_caller_sys_id") or "").strip()
+        if expected_default_caller:
+            self.check("fields", "caller defaults to the configured sys_id",
+                       str(value("caller_id")) == expected_default_caller,
+                       f"caller_id={value('caller_id') or '(empty)'}")
+        else:
+            self.check("fields", "caller defaults to the configured sys_id", None,
+                       f"set {FIXTURE_ENV_KEYS['default_caller_sys_id']} to the instance property value")
+        if expected_default_caller:
+            missing_caller = self.push(
+                "fields-caller-name-not-found", direct_to_incident="true",
+                caller_id=f"{self.prefix} USBEM Verifier Missing Caller")
+            missing_incident = str(missing_caller.get("incident_sys_id") or "")
+            if missing_incident:
+                missing_row = self.sn.record("incident", missing_incident, "caller_id")
+                missing_status = str(missing_caller.get("incident_user_reference_status") or "")
+                self.check("fields", "unmatched caller name uses configured default sys_id",
+                           str(missing_row.get("caller_id") or "") == expected_default_caller and
+                           "caller_id:name_not_found_defaulted" in missing_status,
+                           f"caller_id={missing_row.get('caller_id') or '(empty)'} "
+                           f"status={missing_status}")
+            else:
+                self.check("fields", "unmatched caller name uses configured default sys_id", False,
+                           f"no incident: {missing_caller.get('dti_incident_status')}")
+        else:
+            self.check("fields", "unmatched caller name uses configured default sys_id", None,
+                       f"set {FIXTURE_ENV_KEYS['default_caller_sys_id']} to the instance property value")
         self.check("fields", "tagged as a USBEM DTI incident",
                    str(value("correlation_display")) == "USBEM DTI", str(value("correlation_display")))
 
@@ -920,26 +1062,58 @@ class Verifier:
             self.check("fields", "Software/Monitoring Alert choice labels pass through", False,
                        f"no incident: {software.get('dti_incident_status')}")
 
-        for fixture_key, case in (("affected_user_sys_id", "caller-sysid"),
-                                  ("affected_user_first_name", "caller-first-name")):
-            expected_user = str(self.fixtures.get(fixture_key) or "").strip()
-            if not expected_user:
-                self.check("fields", f"{AFFECTED_USER_FIELD} {case} mapping", None,
+        user_reference_cases = (
+            ("caller_id", "caller_sys_id", "caller_sys_id", "sys_id"),
+            ("caller_id", "caller_full_name", "caller_sys_id", "full name"),
+            ("assigned_to", "assigned_to_sys_id", "assigned_to_sys_id", "sys_id"),
+            ("assigned_to", "assigned_to_full_name", "assigned_to_sys_id", "full name"),
+        )
+        for field_name, fixture_key, expected_sys_id_key, input_kind in user_reference_cases:
+            supplied_user = str(self.fixtures.get(fixture_key) or "").strip()
+            expected_sys_id = str(self.fixtures.get(expected_sys_id_key) or "").strip()
+            expected_user = expected_sys_id or supplied_user
+            case = f"{field_name} by {input_kind}"
+            if not supplied_user:
+                self.check("fields", case + " mapping", None,
                            f"set {FIXTURE_ENV_KEYS[fixture_key]} in the fixture env file")
                 continue
             caller = self.push("fields-" + case, direct_to_incident="true",
-                               **{AFFECTED_USER_FIELD: expected_user})
-            caller_id = str(caller.get("incident_sys_id") or "")
-            if not caller_id:
-                self.check("fields", f"{AFFECTED_USER_FIELD} {case} mapping", False,
+                               **{field_name: supplied_user})
+            incident_id = str(caller.get("incident_sys_id") or "")
+            if not incident_id:
+                self.check("fields", case + " mapping", False,
                            f"no incident: {caller.get('dti_incident_status')}")
                 continue
-            field, stored, display = self.incident_reference(caller_id, (AFFECTED_USER_FIELD,))
-            resolved = self.reference_matches(
-                stored, display, expected_user, allow_first_name=fixture_key == "affected_user_first_name")
-            self.check("fields", f"{AFFECTED_USER_FIELD} {case} mapping",
-                       field == AFFECTED_USER_FIELD and resolved,
-                       f"{field or AFFECTED_USER_FIELD}: {display or stored or '(empty)'}")
+            field, stored, display = self.incident_reference(incident_id, (field_name,))
+            resolved = self.reference_matches(stored, display, expected_user)
+            if input_kind == "full name" and not expected_sys_id and not display:
+                self.check("fields", case + " mapping", None,
+                           f"Incident API returned sys_id {stored or '(empty)'} without a display value; "
+                           f"set {FIXTURE_ENV_KEYS[expected_sys_id_key]} for sys_id-only validation")
+            else:
+                self.check("fields", case + " mapping",
+                           field == field_name and resolved,
+                           f"{field or field_name}: {display or stored or '(empty)'}")
+
+        ambiguous_name = str(self.fixtures.get("ambiguous_caller_full_name") or "").strip()
+        if ambiguous_name and expected_default_caller:
+            ambiguous = self.push("fields-caller-ambiguous", direct_to_incident="true",
+                                  caller_id=ambiguous_name)
+            ambiguous_incident = str(ambiguous.get("incident_sys_id") or "")
+            if ambiguous_incident:
+                caller_ref = self.sn.record("incident", ambiguous_incident, "caller_id")
+                status = str(ambiguous.get("incident_user_reference_status") or "")
+                self.check("fields", "ambiguous caller name uses configured default sys_id",
+                           str(caller_ref.get("caller_id") or "") == expected_default_caller and
+                           "caller_id:ambiguous_name_defaulted" in status,
+                           f"caller_id={caller_ref.get('caller_id') or '(empty)'} status={status}")
+            else:
+                self.check("fields", "ambiguous caller name uses configured default sys_id", False,
+                           f"no incident: {ambiguous.get('dti_incident_status')}")
+        else:
+            self.check("fields", "ambiguous caller name uses configured default sys_id", None,
+                       f"set a duplicated full name in {FIXTURE_ENV_KEYS['ambiguous_caller_full_name']} "
+                       f"and {FIXTURE_ENV_KEYS['default_caller_sys_id']}")
 
         typo = self.push("fields-typo", direct_to_incident="true", catgeory="Network",
                          short_description="typo check")
@@ -1234,7 +1408,7 @@ class Verifier:
         # Two events for one key at the same instant. There is no duplicate protection on the fast
         # path, so this is reported, not failed — but a regression that opens three would show.
         payload = self.payload("edge-concurrent", direct_to_incident="true")
-        clients = [ServiceNow(self.sn.instance, self.sn.user, self.sn.password,
+        clients = [ServiceNow(self.sn.instance, self.sn.auth,
                               self.sn.ca_bundle, self.sn.insecure) for _ in range(2)]
         with ThreadPoolExecutor(max_workers=2) as pool:
             responses = list(pool.map(lambda c: c.push_event(payload), clients))
@@ -1298,48 +1472,99 @@ def main() -> int:
                         help=f"listener source parameter (default: {DEFAULT_SOURCE}; legacy PDI: firstGenericJson)")
     parser.add_argument("--contract", choices=("modern", "legacy"), default="modern",
                         help="response envelope to assert; legacy skips modern-only DTI checks")
-    parser.add_argument("--access-profile", choices=("standard", "limited"), default="standard",
-                        help="limited uses Incident/Alert APIs, skips cleanup, and prints manual note checks")
+    parser.add_argument("--access-profile", choices=("standard", "limited"), default="",
+                        help="limited submits events and uses Incident/Alert APIs, skips cleanup, "
+                             "and prints manual note checks "
+                             "(default for the four production profiles)")
     parser.add_argument("--json", dest="json_out", help="write the results to this file")
-    parser.add_argument("--instance", default="", help="https://<instance>.service-now.com")
+    parser.add_argument("--instance", default="",
+                        help="known production name/URL, or a custom https://<instance>.service-now.com; "
+                             "omit to choose one of the four production profiles")
     parser.add_argument("--user", default="", help="account with the API/table permissions for the selected profile")
     parser.add_argument("--password", default="")
-    parser.add_argument("--env-file", help="a .env holding the credentials")
+    parser.add_argument("--env-file", help=(
+        "credential/config file override; for a production selection the default is "
+        "tests/instances/<name>.env"))
     parser.add_argument("--fixture-file", help=(
-        "fixture values in KEY=VALUE form (default: tests/usbem_verify.fixtures.env beside this script); "
-        "USBEM_FIXTURE_* environment variables override file values"))
+        "fixture values in KEY=VALUE form; production defaults to its selected instance .env, "
+        "custom targets default to tests/usbem_verify.fixtures.env; USBEM_FIXTURE_* environment "
+        "variables override file values"))
     parser.add_argument("--ca-bundle", default="", help="PEM file to trust (a corporate root)")
     parser.add_argument("--insecure", action="store_true", help="skip TLS verification, last resort")
     parser.add_argument("--version", action="version", version="usbem_verify " + VERSION)
     args = parser.parse_args()
 
-    configured_fixture_path = (args.fixture_file or os.environ.get("USBEM_FIXTURE_FILE", "")).strip()
-    fixture_path = Path(configured_fixture_path).expanduser() if configured_fixture_path else \
-        Path(__file__).resolve().with_name("usbem_verify.fixtures.env")
-    if configured_fixture_path and not fixture_path.is_file():
-        parser.error(f"fixture file does not exist: {fixture_path}")
-    if not fixture_path.is_file():
-        fixture_path = None
     try:
-        fixtures, configured_fixtures = load_fixtures(fixture_path)
+        instance_name, instance = select_instance(args.instance)
+    except ValueError as error:
+        parser.error(str(error))
+
+    instance_values = {}
+    instance_config_path = None
+    if instance_name:
+        if args.env_file:
+            instance_config_path = Path(args.env_file).expanduser()
+        else:
+            instance_config_path = Path(__file__).resolve().parent / "instances" / (instance_name + ".env")
+        if instance_config_path.is_file():
+            try:
+                instance_values = parse_env_file(instance_config_path)
+            except OSError as error:
+                parser.error(f"could not read instance config: {error}")
+            configured_name = instance_values.get("USBEM_INSTANCE_NAME", "").strip()
+            if configured_name and configured_name.casefold() != instance_name.casefold():
+                parser.error(f"{instance_config_path} is for {configured_name}, not {instance_name}")
+
+    configured_fixture_path = (args.fixture_file or
+                                ("" if instance_name else os.environ.get("USBEM_FIXTURE_FILE", ""))).strip()
+    if configured_fixture_path:
+        fixture_path = Path(configured_fixture_path).expanduser()
+    elif instance_name:
+        fixture_path = instance_config_path
+    else:
+        fixture_path = Path(__file__).resolve().with_name("usbem_verify.fixtures.env")
+    if fixture_path is not None and not fixture_path.is_file():
+        if configured_fixture_path:
+            parser.error(f"fixture file does not exist: {fixture_path}")
+        fixture_path = None
+
+    if instance_name and not instance_config_path.is_file():
+        slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
+        has_env_oauth = bool(os.environ.get(f"USBEM_{slug}_OAUTH_CLIENT_ID") and
+                             os.environ.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET"))
+        if not has_env_oauth:
+            parser.error(f"copy tests/instances/{instance_name}.env.example to "
+                         f"tests/instances/{instance_name}.env and fill in its OAuth credentials")
+    try:
+        fixtures, configured_fixtures = load_fixtures(
+            fixture_path, values=instance_values if instance_name else None,
+            instance_name=instance_name)
     except (OSError, ValueError) as error:
         parser.error(str(error))
 
-    instance, user, password = resolve_credentials(args)
+    auth = resolve_credentials(args, instance, instance_name, instance_values)
+    access_profile = args.access_profile or ("limited" if instance_name else "standard")
     groups = args.only or (["compat", "payload_contract"] if args.contract == "legacy" else list(GROUPS))
-    if args.access_profile == "limited" and not args.only and args.contract == "legacy":
+    if access_profile == "limited" and not args.only and args.contract == "legacy":
         groups = ["compat", "payload_contract"]
-    sn = ServiceNow(instance, user, password, ca_bundle=args.ca_bundle, insecure=args.insecure)
+    try:
+        sn = ServiceNow(instance, auth, ca_bundle=args.ca_bundle, insecure=args.insecure)
+    except ServiceNowError as error:
+        parser.error(str(error))
     prefix = args.prefix or f"ZZUSBEM-{int(time.time())}"
     verifier = Verifier(sn, prefix, args.alert_wait, args.expect_version,
                         source=args.source, contract=args.contract,
-                        access_profile=args.access_profile, fixtures=fixtures)
+                        access_profile=access_profile, fixtures=fixtures)
 
     print(f"USBEM connector verification {VERSION}")
+    if instance_name:
+        print(f"selected instance {instance_name}")
     print(f"instance {instance}")
+    print(f"authentication {auth['mode']}")
     print(f"connector source {args.source} ({args.contract} contract)")
-    if args.access_profile == "limited":
-        print("access profile limited: requires Incident read/write and Alert read/write/create; "
+    if access_profile == "limited":
+        print("access profile limited: requires em_event write, Incident read/write, "
+              "and Alert read/create/update; events are submitted through the connector; "
               "records are retained; work notes are manually verified from printed numbers")
     if args.contract == "modern":
         print(f"expecting components to report {args.expect_version}")
@@ -1363,7 +1588,7 @@ def main() -> int:
         except Exception as error:        # a broken check must not hide the groups after it
             verifier.check(group, "group completed", False, f"{type(error).__name__}: {error}"[:220])
 
-    if args.keep or args.access_profile == "limited":
+    if args.keep or access_profile == "limited":
         print(f"\nkept every record tagged {prefix}")
     else:
         print("\ncleanup:", verifier.cleanup())

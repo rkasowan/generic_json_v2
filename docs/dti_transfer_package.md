@@ -1,10 +1,10 @@
-# Manual transfer package — genericJsonV2 connector, release 2026.09.25.3
+# Manual transfer package — genericJsonV2 connector, release 2026.09.30.1
 
 Everything that has to move out of dev382837 for this connector, as a package list for a manual
 export. Update sets are not the source of truth here; git is. Each record below is byte-identical
 to the file named beside it, and `scripts/deploy_usbem.py` writes exactly these six records.
 
-Source of truth: `rkasowan/generic_json_v2`, tag/commit for release `2026.09.25.3`.
+Source of truth: `rkasowan/generic_json_v2`, tag/commit for release `2026.09.30.1`.
 
 ## 1. Records to move
 
@@ -57,12 +57,13 @@ label record to every CI class: on dev382837 that is **1,334 `sys_dictionary` ro
 Idempotent. **Run it from Scripts – Background in the UI, not over HTTP** — a client timeout cuts
 the transaction short. Expect minutes, and a slow instance while it runs.
 
-## 3. Properties — optional, code has the same defaults
+## 3. Properties — defaults plus the per-instance caller fallback
 
 | Property | Value |
 |---|---|
 | `x_usbna_usb_event.dti_terminal_incident_states` | `6,7,8` |
 | `x_usbna_usb_event.dti_duplicate_work_note` | `true` |
+| `x_usbna_usb_event.default_caller_sys_id` | a valid caller sys_id for this instance |
 
 `x_usbna_usb_event.default_assignment_group_sys_id` is no longer read. If the target sets it, that
 value stops taking effect — intended: an incident with no resolvable group is left unassigned.
@@ -82,13 +83,16 @@ value stops taking effect — intended: an incident with no resolvable group is 
 - **Incident fields.** `u_netcool_ticket` (boolean) and `u_generating_alert` (reference →
   `em_alert`) must exist on `incident`, or those two mappings are skipped without failing the
   event. Both exist on dev382837 and are verified there as of 2026-09-28.
-- **The `Event Management` user.** The default caller is resolved by display value. A target
-  without that user gets no default caller and reports `incident_caller_default: unresolved`.
+- **Caller sys_id.** Set `x_usbna_usb_event.default_caller_sys_id` to the intended fallback user in
+  each target instance. Exact full-name `caller_id` / `assigned_to` inputs use scoped `sys_user`
+  read; an ambiguous or unresolved caller uses this configured fallback. An unresolved assignee is
+  left blank so on-call assignment can populate it. The API verifier reads only Incident/Alert.
 - **Category and subcategory.** The defaults are the literals `Software` and `Monitoring Alert`.
   Where the choice exists they resolve to its value; where it does not, the literal is written.
   dev382837 has no `Monitoring Alert` choice, so it stores the literal.
 - **Cross-scope privileges.** `x_usbna_usb_event` runs with `runtime_access_tracking = enforcing`
-  and needs `incident` read+create+write and `cmdb_rel_ci` read. Without the incident write the
+  and needs `incident` read+create+write, `sys_user` read for full-name resolution, and
+  `cmdb_rel_ci` read. Without the incident write the
   duplicate work note and post-creation `u_generating_alert` are skipped and reported; without
   `cmdb_rel_ci` read, CI-derived assignment groups cannot work at all. Both were granted on
   dev382837 on 2026-09-28. The rows usually exist already with status `requested` — flip them to
@@ -102,6 +106,7 @@ value stops taking effect — intended: an incident with no resolvable group is 
 python3 tests/usbem_verify.py
 ```
 
-Self-cleaning, exit code 0 when everything passed. `--only deploy` alone confirms that every
-record in the target matches this repo and that the endpoint reports release `2026.09.25.3` for
-all five components.
+For a production selection the verifier defaults to limited access, submits events, checks
+Incident/Alert readback, and retains tagged records. A custom target defaults to self-cleanup.
+Run `python3 scripts/deploy_usbem.py --dry-run` to compare the target's source records with this
+checkout; the verifier's `compat` group checks the endpoint's reported component versions.
