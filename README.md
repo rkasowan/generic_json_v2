@@ -516,11 +516,10 @@ Credentials come from `--instance/--user/--password`, from the environment
 (`servicenow_instance` / `servicenow_user` / `servicenow_password`), or from a `.env` — the one
 named by `--env-file`, or the nearest one at or above the working directory.
 
-**TLS.** Certificates are verified. Both scripts use `requests` when it is installed, because it
-carries its own CA bundle, and the standard library otherwise; the standalone run was verified on
-macOS system Python 3.9 with neither `requests` nor `certifi` present. If you do hit
-`CERTIFICATE_VERIFY_FAILED`: `pip install certifi`, or `--ca-bundle /path/root.pem` for a
-corporate root, or `--insecure` as a last resort.
+**TLS.** Certificates are verified. The verifier uses macOS `/usr/bin/curl` when it is built
+with Apple SecureTransport, so venv runs trust the local macOS Keychain roots. On other systems
+it uses `requests` when installed or Python's verified TLS defaults. `--ca-bundle /path/root.pem`
+supplies an explicit corporate CA bundle; `--insecure` disables verification only as a last resort.
 
 To check the instance against this checkout rather than only its self-reported version, run
 `python3 scripts/deploy_usbem.py --dry-run` — it prints any record whose script differs from the

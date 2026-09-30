@@ -5,8 +5,9 @@ Tests the inbound event API and nothing else. It writes only uniquely tagged eve
 and incidents. Standard profile attempts cleanup; limited production profile retains its records
 because the caller may not have delete access. It does not modify CMDB records or configuration.
 
-Copy this file anywhere and run it. Standard library only; if `requests` happens to be
-installed it is used, because it carries its own CA bundle, but it is not required.
+Copy this file anywhere and run it. It uses Python's standard library. On macOS it uses
+`/usr/bin/curl` with Apple SecureTransport so a venv honors the local Keychain trust roots;
+elsewhere it uses `requests` when installed and otherwise Python's verified TLS defaults.
 
     python3 usbem_verify.py --instance https://xxx.service-now.com --user admin --password '...'
     python3 usbem_verify.py --only fast --only notes
@@ -53,8 +54,10 @@ import argparse
 import base64
 import json
 import os
+import platform
 import re
 import ssl
+import subprocess
 import statistics
 import sys
 import time
@@ -62,13 +65,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from http.cookiejar import CookieJar
 from pathlib import Path
 
 VERSION = "2026.09.28.1"
 EXPECTED_RELEASE = "2026.09.28.1"      # what the live endpoint should report; --expect-version overrides
 
-MARK = "@@JSON@@"
 TERMINAL_STATES = (("6", "Resolved"), ("7", "Closed"), ("8", "Canceled"))
 GROUPS = ("compat", "fast", "fields", "notes", "edge", "timing")
 DEFAULT_SOURCE = "genericJsonV2"
@@ -162,7 +163,8 @@ class ServiceNow:
         self.ca_bundle = ca_bundle
         self.context = self._ssl_context()
         self._session = None
-        if requests is not None:
+        self._macos_curl = self._system_curl_uses_secure_transport()
+        if requests is not None and not self._macos_curl:
             self._session = requests.Session()
             self._session.auth = (user, password)
             self._session.verify = False if insecure else (ca_bundle or (certifi.where() if certifi else True))
@@ -174,8 +176,65 @@ class ServiceNow:
                     pass
         token = base64.b64encode(f"{user}:{password}".encode()).decode()
         self._basic = "Basic " + token
-        self._opener = None
-        self._ck = ""
+
+    @staticmethod
+    def _system_curl_uses_secure_transport() -> bool:
+        """Use Apple's TLS stack on macOS so Python venvs inherit Keychain trust roots."""
+        curl = "/usr/bin/curl"
+        if platform.system() != "Darwin" or not os.path.isfile(curl):
+            return False
+        try:
+            result = subprocess.run([curl, "--version"], capture_output=True, text=True,
+                                    timeout=5, check=False)
+            return result.returncode == 0 and "SecureTransport" in result.stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    @staticmethod
+    def _curl_config_value(value: str) -> str:
+        """Quote one value for curl's stdin config without putting credentials in argv."""
+        escaped = (str(value).replace("\\", "\\\\").replace('"', '\\"')
+                   .replace("\r", "\\r").replace("\n", "\\n"))
+        return '"' + escaped + '"'
+
+    def _request_with_macos_curl(self, method: str, url: str, data, headers):
+        """Call system curl through stdin config; SecureTransport reads macOS Keychain roots."""
+        config = [
+            "user = " + self._curl_config_value(self.user + ":" + self.password),
+            "request = " + self._curl_config_value(method),
+            "url = " + self._curl_config_value(url),
+        ]
+        for name, value in headers.items():
+            config.append("header = " + self._curl_config_value(name + ": " + str(value)))
+        if data is not None:
+            config.append("data-binary = " + self._curl_config_value(data.decode("utf-8")))
+
+        command = ["/usr/bin/curl", "-q", "--config", "-", "--silent", "--show-error",
+                   "--write-out", "\n__USBEM_HTTP_STATUS__:%{http_code}"]
+        if self.insecure:
+            command.append("--insecure")
+        if self.ca_bundle:
+            command.extend(["--cacert", self.ca_bundle])
+        try:
+            result = subprocess.run(command, input=("\n".join(config) + "\n").encode("utf-8"),
+                                    capture_output=True, timeout=self.timeout, check=False)
+        except subprocess.TimeoutExpired:
+            raise ServiceNowError("macOS SecureTransport request timed out") from None
+        except OSError as error:
+            raise ServiceNowError("could not start system curl: " + str(error)) from None
+
+        output = result.stdout.decode("utf-8", "replace")
+        marker = "\n__USBEM_HTTP_STATUS__:"
+        if marker not in output:
+            detail = result.stderr.decode("utf-8", "replace").strip()
+            raise ServiceNowError("macOS SecureTransport request failed" +
+                                  (": " + detail[:300] if detail else ""))
+        text, status_text = output.rsplit(marker, 1)
+        try:
+            status = int(status_text.strip())
+        except ValueError:
+            raise ServiceNowError("macOS SecureTransport returned no HTTP status") from None
+        return status, text
 
     def _ssl_context(self):
         if self.insecure:
@@ -203,7 +262,9 @@ class ServiceNow:
         last = None
         for attempt in range(3):
             try:
-                if self._session is not None:
+                if self._macos_curl:
+                    status, text = self._request_with_macos_curl(method, url, data, headers)
+                elif self._session is not None:
                     response = self._session.request(method, url, data=data, headers=headers,
                                                      timeout=self.timeout)
                     status, text = response.status_code, response.text
@@ -220,12 +281,19 @@ class ServiceNow:
                 break
             except Exception as error:                       # transport, not HTTP
                 message = str(error)
-                if "CERTIFICATE_VERIFY_FAILED" in message or "certificate verify failed" in message:
+                lowered = message.lower()
+                if ("certificate_verify_failed" in lowered or
+                        "certificate verify failed" in lowered or
+                        ("certificate" in lowered and "curl" in lowered)):
+                    trust_hint = ("  macOS uses the system curl SecureTransport trust store and Keychain; "
+                                  "confirm the work CA is installed and trusted there\n"
+                                  if self._macos_curl else
+                                  "  install the corporate CA in the configured Python trust bundle\n")
                     raise ServiceNowError(
                         f"TLS verification failed for {url}\n"
                         f"  {message}\n"
-                        "  pip install certifi        (usual fix on macOS)\n"
-                        "  --ca-bundle /path/root.pem to trust a corporate root\n"
+                        + trust_hint +
+                        "  --ca-bundle /path/root.pem to use an explicit corporate CA bundle\n"
                         "  --insecure                 to skip verification, last resort") from None
                 last = error
                 time.sleep(2 * (attempt + 1))
@@ -286,54 +354,6 @@ class ServiceNow:
             if isinstance(inner, dict):
                 return inner
         return result if isinstance(result, dict) else {"raw": result}
-
-    # ---- background scripts, for the things the Table API will not do
-    def _login(self) -> None:
-        jar = CookieJar()
-        handlers = [urllib.request.HTTPCookieProcessor(jar)]
-        if not self.insecure or True:
-            handlers.append(urllib.request.HTTPSHandler(context=self.context))
-        opener = urllib.request.build_opener(*handlers)
-        form = urllib.parse.urlencode({
-            "user_name": self.user, "user_password": self.password, "sys_action": "sysverb_login",
-        }).encode()
-        opener.open(urllib.request.Request(
-            self.instance + "/login.do", data=form,
-            headers={"Content-Type": "application/x-www-form-urlencoded"}), timeout=60).read()
-        page = opener.open(self.instance + "/sys.scripts.do", timeout=60).read().decode("utf-8", "replace")
-        match = (re.search(r'name=["\']sysparm_ck["\'][^>]*value=["\']([^"\']+)', page)
-                 or re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']sysparm_ck', page))
-        if not match:
-            raise ServiceNowError("could not obtain the background-script token; does this account have admin?")
-        self._opener, self._ck = opener, match.group(1)
-
-    def script(self, source: str, scope: str = "global"):
-        """Run a background script. It should gs.print(MARK + JSON.stringify(payload))."""
-        if self._opener is None:
-            self._login()
-        form = urllib.parse.urlencode({
-            "script": source, "sysparm_ck": self._ck, "runscript": "Run script",
-            "sys_scope": scope, "quota_managed_transaction": "on",
-        }).encode()
-        text = self._opener.open(urllib.request.Request(
-            self.instance + "/sys.scripts.do", data=form,
-            headers={"Content-Type": "application/x-www-form-urlencoded"}),
-            timeout=self.timeout).read().decode("utf-8", "replace")
-        if MARK not in text:
-            snippet = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:400]
-            raise ServiceNowError("background script produced no marked output: " + snippet)
-        # The page echoes the script source above its output, so the first marker is usually the
-        # gs.print() line itself. Try every marker and keep the first that parses.
-        for segment in text.split(MARK)[1:]:
-            chunk = segment.split("<", 1)[0].strip()
-            chunk = (chunk.replace("&quot;", '"').replace("&amp;", "&")
-                          .replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'"))
-            try:
-                return json.loads(chunk)
-            except ValueError:
-                continue
-        raise ServiceNowError("background script output was not JSON: " + text.split(MARK)[-1][:200])
-
 
 # --------------------------------------------------------------------------------- verification
 class Verifier:
@@ -881,7 +901,7 @@ def main() -> int:
                         help="limited uses only Incident/Alert readback, avoids background scripts and deletion, and runs compat+fast")
     parser.add_argument("--json", dest="json_out", help="write the results to this file")
     parser.add_argument("--instance", default="", help="https://<instance>.service-now.com")
-    parser.add_argument("--user", default="", help="an admin account")
+    parser.add_argument("--user", default="", help="account with the API/table permissions for the selected profile")
     parser.add_argument("--password", default="")
     parser.add_argument("--env-file", help="a .env holding the credentials")
     parser.add_argument("--ca-bundle", default="", help="PEM file to trust (a corporate root)")
@@ -912,7 +932,9 @@ def main() -> int:
     if args.contract == "modern":
         print(f"expecting components to report {args.expect_version}")
     print(f"prefix   {prefix}")
-    print(f"http     {'requests' if requests is not None else 'urllib'}"
+    transport = ("macOS SecureTransport/Keychain" if sn._macos_curl else
+                 ("requests" if requests is not None else "urllib"))
+    print(f"http     {transport}"
           f"{' (TLS verification OFF)' if args.insecure else ''}\n", flush=True)
 
     for group in GROUPS:
