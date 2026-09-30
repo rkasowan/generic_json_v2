@@ -16,6 +16,8 @@ All notable project updates should be recorded here when work is completed and p
 - added separate blank config examples for `itsmnowDEVworker`, `itsmnowITworker`,
   `itsmnowUATworker`, and `itsmnowworker`; the Mac verifier continues to use system curl's
   SecureTransport/Keychain trust roots
+- added one ignored shared OAuth env file template with a distinct client ID/secret pair for each
+  production instance; the verifier selects credentials for only the chosen instance
 
 ## 2026.09.28.1 - 2026-09-28
 

@@ -19,8 +19,9 @@ elsewhere it uses `requests` when installed and otherwise Python's verified TLS 
     python3 usbem_verify.py --json out.json       # machine-readable results
 
 With no --instance, the verifier prompts you to choose one of the four production instances.
-Each choice loads its own ignored tests/instances/<name>.env file, including that instance's
-OAuth client credentials and fixtures. Use --instance for a one-off target such as a PDI.
+OAuth credentials can be kept in tests/instances/production-oauth.env; the verifier reads only
+the selected instance's values. Optional fixture values can go in that instance's ignored
+tests/instances/<name>.env file. Use --instance for a one-off target such as a PDI.
 
 Terminal incident transitions use only the caller's Incident API access. If an ACL blocks a
 transition, that state case is reported as skipped; the verifier never uses Scripts - Background.
@@ -192,9 +193,11 @@ def select_instance(requested: str) -> tuple[str, str]:
     return "", candidate_url.rstrip("/")
 
 
-def resolve_credentials(args, instance: str, instance_name: str = "", instance_values=None) -> dict:
+def resolve_credentials(args, instance: str, instance_name: str = "", instance_values=None,
+                        shared_values=None) -> dict:
     """Resolve one selected instance's OAuth credentials, or Basic auth for a custom target."""
     instance_values = instance_values or {}
+    shared_values = shared_values or {}
     if instance_name and (args.user or args.password):
         sys.exit("the four production profiles use their per-instance OAuth credentials; "
                  "remove --user/--password")
@@ -214,13 +217,17 @@ def resolve_credentials(args, instance: str, instance_name: str = "", instance_v
     if instance_name:
         slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
         oauth_id = (instance_values.get("USBEM_OAUTH_CLIENT_ID") or
-                    env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID", ""))
+                    env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID") or
+                    shared_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID", ""))
         oauth_secret = (instance_values.get("USBEM_OAUTH_CLIENT_SECRET") or
-                        env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET", ""))
+                        env_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET") or
+                        shared_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET", ""))
         oauth_scope = (instance_values.get("USBEM_OAUTH_SCOPE") or
-                       env_values.get(f"USBEM_{slug}_OAUTH_SCOPE", ""))
+                       env_values.get(f"USBEM_{slug}_OAUTH_SCOPE") or
+                       shared_values.get(f"USBEM_{slug}_OAUTH_SCOPE", ""))
         if not oauth_id or not oauth_secret:
-            sys.exit(f"OAuth client ID/secret are missing for {instance_name}; fill "
+            sys.exit(f"OAuth client ID/secret are missing for {instance_name}; fill the matching "
+                     "entries in tests/instances/production-oauth.env or provide them through "
                      f"tests/instances/{instance_name}.env")
         return {"mode": "oauth", "client_id": oauth_id,
                 "client_secret": oauth_secret, "scope": oauth_scope}
@@ -1483,8 +1490,8 @@ def main() -> int:
     parser.add_argument("--user", default="", help="account with the API/table permissions for the selected profile")
     parser.add_argument("--password", default="")
     parser.add_argument("--env-file", help=(
-        "credential/config file override; for a production selection the default is "
-        "tests/instances/<name>.env"))
+        "optional selected-instance credential/fixture file; production also auto-loads "
+        "tests/instances/production-oauth.env"))
     parser.add_argument("--fixture-file", help=(
         "fixture values in KEY=VALUE form; production defaults to its selected instance .env, "
         "custom targets default to tests/usbem_verify.fixtures.env; USBEM_FIXTURE_* environment "
@@ -1500,6 +1507,7 @@ def main() -> int:
         parser.error(str(error))
 
     instance_values = {}
+    shared_oauth_values = {}
     instance_config_path = None
     if instance_name:
         if args.env_file:
@@ -1514,6 +1522,12 @@ def main() -> int:
             configured_name = instance_values.get("USBEM_INSTANCE_NAME", "").strip()
             if configured_name and configured_name.casefold() != instance_name.casefold():
                 parser.error(f"{instance_config_path} is for {configured_name}, not {instance_name}")
+        shared_oauth_path = Path(__file__).resolve().parent / "instances" / "production-oauth.env"
+        if shared_oauth_path.is_file():
+            try:
+                shared_oauth_values = parse_env_file(shared_oauth_path)
+            except OSError as error:
+                parser.error(f"could not read shared OAuth config: {error}")
 
     configured_fixture_path = (args.fixture_file or
                                 ("" if instance_name else os.environ.get("USBEM_FIXTURE_FILE", ""))).strip()
@@ -1530,11 +1544,16 @@ def main() -> int:
 
     if instance_name and not instance_config_path.is_file():
         slug = re.sub(r"[^A-Za-z0-9]", "", instance_name).upper()
+        has_profile_oauth = bool(instance_values.get("USBEM_OAUTH_CLIENT_ID") and
+                                  instance_values.get("USBEM_OAUTH_CLIENT_SECRET"))
+        has_shared_oauth = bool(shared_oauth_values.get(f"USBEM_{slug}_OAUTH_CLIENT_ID") and
+                                shared_oauth_values.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET"))
         has_env_oauth = bool(os.environ.get(f"USBEM_{slug}_OAUTH_CLIENT_ID") and
                              os.environ.get(f"USBEM_{slug}_OAUTH_CLIENT_SECRET"))
-        if not has_env_oauth:
-            parser.error(f"copy tests/instances/{instance_name}.env.example to "
-                         f"tests/instances/{instance_name}.env and fill in its OAuth credentials")
+        if not (has_profile_oauth or has_shared_oauth or has_env_oauth):
+            parser.error("copy tests/instances/production-oauth.env.example to "
+                         "tests/instances/production-oauth.env and fill the selected instance's "
+                         "client ID and secret")
     try:
         fixtures, configured_fixtures = load_fixtures(
             fixture_path, values=instance_values if instance_name else None,
@@ -1542,7 +1561,8 @@ def main() -> int:
     except (OSError, ValueError) as error:
         parser.error(str(error))
 
-    auth = resolve_credentials(args, instance, instance_name, instance_values)
+    auth = resolve_credentials(args, instance, instance_name, instance_values,
+                               shared_oauth_values)
     access_profile = args.access_profile or ("limited" if instance_name else "standard")
     groups = args.only or (["compat", "payload_contract"] if args.contract == "legacy" else list(GROUPS))
     if access_profile == "limited" and not args.only and args.contract == "legacy":

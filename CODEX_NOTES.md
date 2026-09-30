@@ -28,8 +28,9 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
   names via scoped `sys_user` read; missing/ambiguous caller uses the per-instance
   `x_usbna_usb_event.default_caller_sys_id`, while unresolved `assigned_to` stays blank for on-call.
 - production verifier menu uses exactly itsmnowDEVworker, itsmnowITworker, itsmnowUATworker, and
-  itsmnowworker. Each selection loads only `tests/instances/<name>.env`; templates are tracked and
-  filled files ignored. OAuth secrets stay local.
+  itsmnowworker. OAuth pairs can be filled in `tests/instances/production-oauth.env`; the verifier
+  reads only the selected instance's pair. Per-instance ignored files hold optional fixtures.
+  Templates are tracked and filled files ignored. OAuth secrets stay local.
 - production verifier defaults to em_event W + Incident RW + Alert RWC, submits events via the
   connector, retains records, and reads mapped users only from Incident. It never queries
   `sys_user` or `sys_journal_field` through the API.
