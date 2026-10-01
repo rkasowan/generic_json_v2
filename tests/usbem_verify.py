@@ -698,15 +698,19 @@ class Verifier:
 
     def ci_reference_matches_after_link(self, case: str, incident_sys_id: str,
                                         expected_sys_id: str):
+        deadline = time.time() + self.alert_wait
         matched = self.incident_reference_matches_sys_id(
             incident_sys_id, "cmdb_ci", expected_sys_id)
         if matched is False:
             # The fast path inserts before the alert exists. A production incident rule may
             # clear cmdb_ci until the reconcile rule writes u_generating_alert, after which the
-            # connector restores the resolved CI. Recheck once that asynchronous link completes.
+            # connector restores the resolved CI. Alert linking can become visible before the
+            # follow-up Incident update, so keep checking until the same bounded alert deadline.
             linked = self.wait_any_alert_linked(
-                self.key(case), incident_sys_id, timeout=self.alert_wait)
-            if linked:
+                self.key(case), incident_sys_id,
+                timeout=max(0.1, deadline - time.time()))
+            while linked and matched is False and time.time() < deadline:
+                time.sleep(min(1.0, max(0.0, deadline - time.time())))
                 matched = self.incident_reference_matches_sys_id(
                     incident_sys_id, "cmdb_ci", expected_sys_id)
         return matched
