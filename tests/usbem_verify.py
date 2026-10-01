@@ -575,6 +575,27 @@ class Verifier:
             "description": f"USBEM verification {case}",
         }
         body.update(overrides)
+
+        # These synthetic test nodes do not exist in CMDB. Use the configured real CI on DTI
+        # events so unrelated incident checks do not all fail insert when the instance requires
+        # cmdb_ci. Keep the ciType + ciIdentifier lookup case independent so it still tests that
+        # mapping path; explicit cmdbCi inputs are also left untouched.
+        direct_to_incident = any(
+            str(body.get(key, "")).strip().casefold() in ("true", "1", "yes")
+            for key in ("direct_to_incident", "directToIncident")
+        )
+        has_ci_input = any(str(body.get(key, "")).strip()
+                           for key in ("cmdb_ci", "cmdbCi"))
+        tests_ci_identifier = (
+            any(str(body.get(key, "")).strip()
+                for key in ("ci_type", "ciType")) and
+            any(str(body.get(key, "")).strip()
+                for key in ("ci_identifier", "ciIdentifier", "ci_identifiers", "ciIdentifiers"))
+        )
+        fixture_ci = str(self.fixtures.get("ci_sys_id") or
+                         self.fixtures.get("ci_name") or "").strip()
+        if direct_to_incident and fixture_ci and not has_ci_input and not tests_ci_identifier:
+            body["cmdbCi"] = fixture_ci
         return body
 
     def push(self, case: str, **overrides) -> dict:
@@ -611,6 +632,26 @@ class Verifier:
             first_name = display.split(maxsplit=1)[0] if display else ""
             return first_name.casefold() == expected_folded
         return False
+
+    @staticmethod
+    def ci_reference_matches(value: str, display: str, expected_sys_id: str,
+                             expected_name: str) -> bool:
+        """Allow Incident-only API access to verify a CI by display label when its sys_id is
+        masked. If the API returns a sys_id, it remains the authoritative value to compare."""
+        value = str(value or "").strip()
+        display = str(display or "").strip()
+        expected_sys_id = str(expected_sys_id or "").strip()
+        expected_name = str(expected_name or "").strip()
+
+        if expected_sys_id and value.casefold() == expected_sys_id.casefold():
+            return True
+        if expected_sys_id and value and re.fullmatch(r"[0-9a-fA-F]{32}", value):
+            return False
+
+        # Some restricted REST responses expose the display value in `value` and omit
+        # `display_value`; accept the configured exact CI name in either shape.
+        observed_name = display or value
+        return bool(expected_name and observed_name.casefold() == expected_name.casefold())
 
     def lookup_incident(self, case: str, payload: dict) -> str:
         response = self.sn.push_event(payload, source=self.source)
@@ -1169,8 +1210,7 @@ class Verifier:
         ci_sys_id = str(self.fixtures.get("ci_sys_id") or "").strip()
         ci_input = ci_sys_id or ci_name
 
-        for label, supplied, expected in (("CI sys_id", ci_sys_id, ci_sys_id),
-                                          ("CI exact name", ci_name, ci_name)):
+        for label, supplied in (("CI sys_id", ci_sys_id), ("CI exact name", ci_name)):
             if not supplied:
                 self.check("lookups", label + " lookup", None,
                            f"set {FIXTURE_ENV_KEYS['ci_sys_id']} or {FIXTURE_ENV_KEYS['ci_name']} in tests/usbem_verify.env")
@@ -1181,7 +1221,8 @@ class Verifier:
             if incident_id:
                 field, stored, display = self.incident_reference(incident_id, ("cmdb_ci",))
                 self.check("lookups", label + " maps to Incident.cmdb_ci",
-                           field == "cmdb_ci" and self.reference_matches(stored, display, expected),
+                           field == "cmdb_ci" and self.ci_reference_matches(
+                               stored, display, ci_sys_id, ci_name),
                            f"{field or 'cmdb_ci'}: {display or stored or '(empty)'}")
 
         ci_type = str(self.fixtures.get("ci_type") or "").strip()
@@ -1193,7 +1234,7 @@ class Verifier:
             if incident_id:
                 field, stored, display = self.incident_reference(incident_id, ("cmdb_ci",))
                 expected_ci = ci_sys_id or ci_name
-                matched = (self.reference_matches(stored, display, expected_ci) if expected_ci
+                matched = (self.ci_reference_matches(stored, display, ci_sys_id, ci_name) if expected_ci
                            else bool(stored or display))
                 self.check("lookups", "camelCase ciType + ciIdentifier resolve",
                            field == "cmdb_ci" and matched,
@@ -1413,11 +1454,9 @@ class Verifier:
         long_key = (self.prefix + "-edge-long-" + ("k" * 130))[:180]
         numbers, statuses = [], []
         for _ in range(3):
-            response = self.sn.push_event({
-                "source": "usbem-verify", "event_class": "usbem-verify",
-                "node": f"{self.prefix.lower()}-host", "resource": "edge-long",
-                "metric_name": "verify", "severity": "1", "message_key": long_key,
-                "description": "USBEM verification long key", "direct_to_incident": "true"})
+            response = self.sn.push_event(self.payload(
+                "edge-long", message_key=long_key, direct_to_incident="true"),
+                source=self.source)
             numbers.append(response.get("incident_number", ""))
             statuses.append(response.get("dti_incident_status", ""))
         open_incidents = self.sn.table(
