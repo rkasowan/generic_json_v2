@@ -532,7 +532,7 @@ returns a non-zero exit code. Groups, selectable with `--only`:
 |---|---|
 | `compat` | response envelope, plain events, alerts, `records` batches, no incident without DTI, and legacy `dti_short_description` / `dti_work_note` names on the modern listener |
 | `payload_contract` | legacy nested wrappers (`event`, `payload`, `data`, `record`, `alert`), bare arrays, `events` batches, camelCase aliases, and `additionalInfo` object / JSON-string forms, verified through alert readback |
-| `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, opens a new one once it is Resolved/Closed/Canceled, and the Business Rule links the alert afterward |
+| `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, resolves it with `Solved (Permanently)`, `Abandoned`, and `Testing DTI`, opens a new one, and the Business Rule links the alert afterward |
 | `fields` | default Software/Monitoring Alert category and subcategory, Hardware/Server and Software/Monitoring Alert pass-through, caller_id and assigned_to by configured sys_id or full name, impact/urgency, and other payload overrides |
 | `lookups` | configured CI name/sys_id and `ciType` + `ciIdentifier`, CI support-group fallback, named assignment group, service, offering, and optional CAR ID, verified through Incident/Alert readback |
 | `notes` | creates a DTI incident note and an alert note, then prints record numbers and exact manual checks; interactive runs collect y/n/skip, non-interactive runs report observations |

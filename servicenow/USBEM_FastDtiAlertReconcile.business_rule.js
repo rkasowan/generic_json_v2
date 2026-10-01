@@ -8,8 +8,8 @@
  *   Insert     true
  *   Update     true
  *   Order      150
- *   Condition  (current.additional_info.indexOf('direct_to_incident') > -1 ||
- *               current.additional_info.indexOf('work_notes') > -1) &&
+ *   Condition  ((current.getValue('additional_info') || '').indexOf('direct_to_incident') > -1 ||
+ *               (current.getValue('additional_info') || '').indexOf('work_notes') > -1) &&
  *              (current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)
  *
  * scripts/deploy_usbem.py holds that condition as BR_CONDITION and writes it with the script, so

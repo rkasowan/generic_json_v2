@@ -734,10 +734,20 @@ USBEM_Lookups.prototype = {
         var gr;
         var key;
         var validKeyCount = 0;
+        var queryTableName;
         if (!this.core.tableExists(tableName, trace) || !this.core.isObject(identifierObj)) {
             return { match: null, count: 0, ambiguous: false, rows: [] };
         }
-        gr = new GlideRecord(tableName);
+        // Query the CMDB parent table for CIs. Scoped apps commonly have read access to
+        // cmdb_ci but not every child class table (for example cmdb_ci_linux_server).
+        // INSTANCEOF keeps the requested class constraint, including its descendants, while
+        // avoiding a separate cross-scope privilege for every CI class.
+        queryTableName = (tableName === 'cmdb_ci' || tableName.indexOf('cmdb_ci_') === 0)
+            ? 'cmdb_ci' : tableName;
+        gr = new GlideRecord(queryTableName);
+        if (queryTableName === 'cmdb_ci' && tableName !== 'cmdb_ci') {
+            gr.addQuery('sys_class_name', 'INSTANCEOF', tableName);
+        }
         for (key in identifierObj) {
             if (!this.core.hasOwn(identifierObj, key) || !this.core.hasValue(identifierObj[key]) || !gr.isValidField(key)) {
                 continue;
@@ -1898,4 +1908,3 @@ USBEM_Lookups.prototype = {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = USBEM_Lookups;
 }
-

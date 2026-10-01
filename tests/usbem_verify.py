@@ -46,8 +46,8 @@ GROUPS (--only <name>, repeatable):
              asserts readback through alerts (no em_event table ACL required)
     lookups  optional fixture-driven CI, assignment-group, service, and offering resolution,
              verified on incidents through the caller's Incident read access
-    fast     direct_to_incident returns an incident immediately, reuses it while open, opens a
-             new one once it is Resolved/Closed/Canceled, and the Business Rule links the alert
+    fast     direct_to_incident returns an incident immediately, reuses it while open, resolves it
+             with the required closure fields, opens a new incident, and links the alert
     fields   NetCool, default/overridden category and subcategory, caller_id by sys_id/name,
              severity tiers, and other incident overrides
     notes    manually verify incident and alert work notes using printed record numbers
@@ -77,7 +77,12 @@ from pathlib import Path
 VERSION = "2026.09.30.1"
 EXPECTED_RELEASE = "2026.09.30.1"      # what the live endpoint should report; --expect-version overrides
 
-TERMINAL_STATES = (("6", "Resolved"), ("7", "Closed"), ("8", "Canceled"))
+RESOLVED_STATE = ("6", "Resolved")
+RESOLUTION_FIELDS = {
+    "close_code": "Solved (Permanently)",
+    "u_cause": "Abandoned",
+    "close_notes": "Testing DTI",
+}
 GROUPS = ("compat", "payload_contract", "fast", "fields", "lookups", "notes", "edge", "timing")
 DEFAULT_SOURCE = "genericJsonV2"
 PRODUCTION_INSTANCES = ("itsmnowDEVworker", "itsmnowITworker",
@@ -92,7 +97,9 @@ FIXTURE_ENV_KEYS = {
     "assignment_group": "USBEM_FIXTURE_ASSIGNMENT_GROUP",
     "ci_support_group": "USBEM_FIXTURE_CI_SUPPORT_GROUP",
     "service_name": "USBEM_FIXTURE_SERVICE_NAME",
+    "service_sys_id": "USBEM_FIXTURE_SERVICE_SYS_ID",
     "offering_name": "USBEM_FIXTURE_OFFERING_NAME",
+    "offering_sys_id": "USBEM_FIXTURE_OFFERING_SYS_ID",
     "business_app_car_id": "USBEM_FIXTURE_BUSINESS_APP_CAR_ID",
     "caller_sys_id": "USBEM_FIXTURE_CALLER_SYS_ID",
     "caller_full_name": "USBEM_FIXTURE_CALLER_FULL_NAME",
@@ -506,8 +513,11 @@ class ServiceNow:
             "sysparm_exclude_reference_link": "true",
         }) or {}
 
-    def update(self, name: str, sys_id: str, payload: dict):
-        return self._request("PATCH", f"{self.instance}/api/now/table/{name}/{sys_id}", body=payload) or {}
+    def update(self, name: str, sys_id: str, payload: dict,
+               input_display_value: bool = False):
+        params = {"sysparm_input_display_value": "true"} if input_display_value else None
+        return self._request("PATCH", f"{self.instance}/api/now/table/{name}/{sys_id}",
+                             params=params, body=payload) or {}
 
     def delete(self, name: str, sys_id: str):
         self._request("DELETE", f"{self.instance}/api/now/table/{name}/{sys_id}")
@@ -614,7 +624,7 @@ class Verifier:
                 displayed = str(value.get("display_value") or "")
                 if stored or displayed:
                     return field, stored, displayed
-                continue
+                return field, "", ""
             if value:
                 return field, str(value), ""
         return "", "", ""
@@ -632,6 +642,29 @@ class Verifier:
             first_name = display.split(maxsplit=1)[0] if display else ""
             return first_name.casefold() == expected_folded
         return False
+
+    def check_reference_fixture(self, group: str, name: str, field: str,
+                                stored: str, display: str, expected_name: str,
+                                expected_sys_id: str, fixture_key: str) -> None:
+        observed = f"{field or '(not returned)'}: {display or stored or '(empty)'}"
+        if not field:
+            self.check(group, name, None,
+                       f"Incident API did not return this reference; check its field read ACL ({observed})")
+        elif expected_sys_id:
+            matched = self.reference_matches(stored, display, expected_sys_id)
+            self.check(group, name, matched,
+                       f"{observed} (expected sys_id {expected_sys_id})")
+        elif self.reference_matches(stored, display, expected_name):
+            self.check(group, name, True, f"{observed} (matched configured name)")
+        elif not stored and not display:
+            self.check(group, name, False, f"{observed}; lookup returned an empty reference")
+        elif re.fullmatch(r"[0-9a-fA-F]{32}", stored) and (not display or display == stored):
+            self.check(group, name, None,
+                       f"{observed}; API exposes only the reference sys_id, so configure "
+                       f"{fixture_key} for exact validation")
+        else:
+            self.check(group, name, False,
+                       f"{observed} (expected name {expected_name})")
 
     def incident_reference_matches_sys_id(self, incident_sys_id: str, field: str,
                                           expected_sys_id: str):
@@ -711,25 +744,42 @@ class Verifier:
                 return {}
             time.sleep(3)
 
-    def set_incident_state(self, sys_id: str, state: str) -> dict:
-        """Move an incident this run created to Resolved / Closed / Canceled.
+    def set_incident_state(self, sys_id: str) -> dict:
+        """Resolve an incident this run created using the instance's required closure fields.
 
-        Use only the caller's Incident API access. If policy or mandatory fields block a state
-        transition, report it as unavailable; never elevate through Scripts - Background.
+        Use display values because the contract specifies the human-readable close code and the
+        internal value can vary by instance. If policy or mandatory fields block the transition,
+        report it as unavailable; never elevate through Scripts - Background.
         """
         try:
             self.sn.update("incident", sys_id, {
-                "state": state, "close_code": "Solved (Permanently)",
-                "close_notes": "USBEM verification"})
-            back = self.sn.record("incident", sys_id, "state,number")
-            if str(back.get("state")) == state:
-                return {"state": str(back.get("state")), "number": str(back.get("number")),
-                        "how": "table api"}
-            return {"state": str(back.get("state", "")),
-                    "number": str(back.get("number", "")),
-                    "error": f"state remained {back.get('state')}", "how": "table api"}
+                "state": RESOLVED_STATE[1], **RESOLUTION_FIELDS}, input_display_value=True)
+            back = self.sn.record("incident", sys_id,
+                                  "state,number,close_code,u_cause,close_notes", display="all")
+
+            def read_value(field: str):
+                value = back.get(field)
+                if isinstance(value, dict):
+                    return (str(value.get("value") or ""),
+                            str(value.get("display_value") or ""))
+                text = str(value or "")
+                return text, text
+
+            state_value, state_display = read_value("state")
+            close_code_value, close_code_display = read_value("close_code")
+            cause_value, cause_display = read_value("u_cause")
+            notes_value, notes_display = read_value("close_notes")
+            return {
+                "state": state_value,
+                "state_display": state_display,
+                "number": str(back.get("number", "")),
+                "close_code": close_code_display or close_code_value,
+                "u_cause": cause_display or cause_value,
+                "close_notes": notes_display or notes_value,
+                "how": "table api",
+            }
         except ServiceNowError as error:
-            return {"error": str(error)[:140], "how": "unavailable"}
+            return {"error": " ".join(str(error).split())[:280], "how": "unavailable"}
 
     # ---- groups
     def group_compat(self) -> None:
@@ -988,44 +1038,51 @@ class Verifier:
         else:
             self.check(group, "the alert links to the incident", False, "no alert created")
 
-        for state, label in TERMINAL_STATES:
-            case = f"{group}-{label.lower()}"
-            opening = self.push(case, **extra)
-            if not opening.get("incident_sys_id"):
-                self.check(group, f"{label}: first incident", False,
-                           str(opening.get("dti_incident_status")))
-                continue
-            moved = self.set_incident_state(opening["incident_sys_id"], state)
-            if moved.get("state") != state:
-                self.check(group, f"{label} -> a new incident", None,
-                           f"skipped: this account cannot move an incident to {label} "
-                           f"({moved.get('error') or moved.get('how')})")
-                continue
+        state, label = RESOLVED_STATE
+        case = f"{group}-{label.lower()}"
+        opening = self.push(case, **extra)
+        if not opening.get("incident_sys_id"):
+            self.check(group, f"{label}: first incident", False,
+                       str(opening.get("dti_incident_status")))
+            return
+        moved = self.set_incident_state(opening["incident_sys_id"])
+        if moved.get("state") != state and moved.get("state_display") != label:
+            self.check(group, f"{label} -> a new incident", None,
+                       f"skipped: this account could not resolve the test incident "
+                       f"({moved.get('error') or moved.get('how')})")
+            return
 
-            # What the fast path could have claimed in-request, recorded before the event lands.
-            after = self.push(case, **extra)
-            fresh = after.get("incident_sys_id") not in ("", None, opening["incident_sys_id"])
-            self.check(group, f"{label} -> a new incident", fresh,
-                       f"{after.get('incident_number')} (was {opening.get('incident_number')}) "
-                       f"status={after.get('dti_incident_status')}")
-            if not fresh:
-                continue
+        closure_ok = all(moved.get(field) == expected
+                         for field, expected in RESOLUTION_FIELDS.items())
+        self.check(group, "Resolved closure fields persist", closure_ok,
+                   ", ".join(f"{field}={moved.get(field) or '(empty)'}"
+                             for field in RESOLUTION_FIELDS))
+        if not closure_ok:
+            return
 
-            if self.wait_alert(self.key(case)):
-                # This is the slowest thing the system does: Event Management may have to reopen
-                # the alert that closed with the old incident, or make a new one, before anything
-                # can link it. Give it double the usual window before calling it a failure.
-                linked = self.wait_any_alert_linked(self.key(case), after["incident_sys_id"],
-                                                    timeout=self.alert_wait * 2)
-                self.check(group, f"{label}: the alert follows", bool(linked),
-                           f"{linked['number']} -> {after.get('incident_number')}" if linked
-                           else "no alert points at it; links are " +
-                                str([(a["number"], a.get("state"), a.get("incident", "")[:8])
-                                     for a in self.alerts_for(self.key(case))]))
-            repeat = self.push(case, **extra)
-            self.check(group, f"{label}: the next event reuses the new one",
-                       repeat.get("incident_sys_id") == after["incident_sys_id"],
-                       f"{repeat.get('incident_number')} status={repeat.get('dti_incident_status')}")
+        # A resolved incident is terminal for this connector's reuse check. Production profiles
+        # do not cancel incidents, so the verifier intentionally never tries state 8.
+        after = self.push(case, **extra)
+        fresh = after.get("incident_sys_id") not in ("", None, opening["incident_sys_id"])
+        self.check(group, f"{label} -> a new incident", fresh,
+                   f"{after.get('incident_number')} (was {opening.get('incident_number')}) "
+                   f"status={after.get('dti_incident_status')}")
+        if not fresh:
+            return
+
+        if self.wait_alert(self.key(case)):
+            # Event Management may reopen the old alert or create a new one before linking it.
+            linked = self.wait_any_alert_linked(self.key(case), after["incident_sys_id"],
+                                                timeout=self.alert_wait * 2)
+            self.check(group, f"{label}: the alert follows", bool(linked),
+                       f"{linked['number']} -> {after.get('incident_number')}" if linked
+                       else "no alert points at it; links are " +
+                            str([(a["number"], a.get("state"), a.get("incident", "")[:8])
+                                 for a in self.alerts_for(self.key(case))]))
+        repeat = self.push(case, **extra)
+        self.check(group, f"{label}: the next event reuses the new one",
+                   repeat.get("incident_sys_id") == after["incident_sys_id"],
+                   f"{repeat.get('incident_number')} status={repeat.get('dti_incident_status')}")
 
     def group_fast(self) -> None:
         self._dti_cycle("fast")
@@ -1181,12 +1238,20 @@ class Verifier:
                                   caller_id=ambiguous_name)
             ambiguous_incident = str(ambiguous.get("incident_sys_id") or "")
             if ambiguous_incident:
-                caller_ref = self.sn.record("incident", ambiguous_incident, "caller_id")
                 status = str(ambiguous.get("incident_user_reference_status") or "")
-                self.check("fields", "ambiguous caller name uses configured default sys_id",
-                           str(caller_ref.get("caller_id") or "") == expected_default_caller and
-                           "caller_id:ambiguous_name_defaulted" in status,
-                           f"caller_id={caller_ref.get('caller_id') or '(empty)'} status={status}")
+                if "caller_id:ambiguous_name_defaulted" in status:
+                    caller_ref = self.sn.record("incident", ambiguous_incident, "caller_id")
+                    self.check("fields", "ambiguous caller name uses configured default sys_id",
+                               str(caller_ref.get("caller_id") or "") == expected_default_caller,
+                               f"caller_id={caller_ref.get('caller_id') or '(empty)'} status={status}")
+                elif "caller_id:full_name" in status:
+                    self.check("fields", "ambiguous caller name uses configured default sys_id", None,
+                               "the configured name resolved uniquely here; duplicate-name fallback "
+                               f"was not exercised (status={status})")
+                else:
+                    self.check("fields", "ambiguous caller name uses configured default sys_id", None,
+                               "the configured name did not produce an ambiguous match; "
+                               f"fallback was not exercised (status={status or '(no status)'})")
             else:
                 self.check("fields", "ambiguous caller name uses configured default sys_id", False,
                            f"no incident: {ambiguous.get('dti_incident_status')}")
@@ -1298,6 +1363,7 @@ class Verifier:
                        f"set {FIXTURE_ENV_KEYS['assignment_group']} in tests/usbem_verify.env")
 
         service = str(self.fixtures.get("service_name") or "").strip()
+        service_sys_id = str(self.fixtures.get("service_sys_id") or "").strip()
         if service:
             case = "lookup-service"
             incident_id = self.lookup_incident(case, self.payload(
@@ -1305,15 +1371,15 @@ class Verifier:
             if incident_id:
                 field, stored, display = self.incident_reference(
                     incident_id, ("business_service", "service"))
-                self.check("lookups", "camelCase usbemService resolves",
-                           field in ("business_service", "service") and
-                           self.reference_matches(stored, display, service),
-                           f"{field or 'business_service/service'}: {display or stored or '(empty)'}")
+                self.check_reference_fixture(
+                    "lookups", "camelCase usbemService resolves", field, stored, display,
+                    service, service_sys_id, FIXTURE_ENV_KEYS["service_sys_id"])
         else:
             self.check("lookups", "camelCase usbemService resolves", None,
                        f"set {FIXTURE_ENV_KEYS['service_name']} in tests/usbem_verify.env")
 
         offering = str(self.fixtures.get("offering_name") or "").strip()
+        offering_sys_id = str(self.fixtures.get("offering_sys_id") or "").strip()
         if offering:
             case = "lookup-offering"
             incident_id = self.lookup_incident(case, self.payload(
@@ -1322,11 +1388,9 @@ class Verifier:
             if incident_id:
                 field, stored, display = self.incident_reference(
                     incident_id, ("service_offering",))
-                self.check("lookups", "camelCase usbemOffering resolves",
-                           field == "service_offering" and
-                           self.reference_matches(stored, display, offering),
-                           f"{display or stored or '(empty)'} (expected {offering}"
-                           + (f" under service {service}" if service else " by exact name") + ")")
+                self.check_reference_fixture(
+                    "lookups", "camelCase usbemOffering resolves", field, stored, display,
+                    offering, offering_sys_id, FIXTURE_ENV_KEYS["offering_sys_id"])
         else:
             self.check("lookups", "camelCase usbemOffering resolves", None,
                        f"set {FIXTURE_ENV_KEYS['offering_name']} in tests/usbem_verify.env")

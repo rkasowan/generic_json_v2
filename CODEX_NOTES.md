@@ -39,9 +39,9 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 
 ## Release 2026.09.28.1 (2026-09-28)
 
-- alert work notes: posted once, through a fresh record with `setWorkflow(false)`, and the key is
-  consumed from the alert's `additional_info`. The old code wrote through the business rule's own
-  `current` and re-posted on every later alert write
+- alert work notes: posted once through a fresh record, using journal-field dot assignment with
+  workflow/auditing enabled; the note key is consumed from `additional_info` before update.
+  `setWorkflow(false)` suppressed the Activity entry, and scoped fencing blocks `setJournalEntry()`.
 - a DTI sender's plain `work_notes` goes to the incident only; `alert_work_notes` is the alert's
 - long message keys: `correlation_id` now stores (and is queried by) a leading slice plus a stable
   FNV hash of the whole key, so keys over 100 characters stop opening an incident per event
@@ -74,14 +74,21 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 - the fast path now claims an already-existing alert during the request
   (`claimAlertForFastIncident`), so a terminal-state relink no longer waits for the rule to fire
 - first-event fast DTI still inserts before an alert exists, so `u_generating_alert` is added by
-  the later alert reconcile. If an incident before-insert rule clears `cmdb_ci` while that
-  reference is empty, the reconcile now persists `u_generating_alert` first and restores a blank
-  `cmdb_ci` from the alert's operational `additional_info`; the limited-access verifier checks
+  the later alert reconcile. If an incident before-insert rule clears or substitutes `cmdb_ci`
+  while that reference is empty, the reconcile persists `u_generating_alert` first and restores
+  the exact event-resolved CI from alert `additional_info`; the limited-access verifier checks
   the stored CI sys_id through the Incident table query, not its potentially duplicated display name
+- `ciType` + `ciIdentifier` resolves CMDB descendants by querying `cmdb_ci` with an `INSTANCEOF`
+  class filter. This avoids a scoped read privilege per CI child table while preserving the
+  requested class, including server vs virtual-machine distinctions.
 - `scripts/deploy_usbem.py` + `tests/usbem_verify.py`, both standard-library only
 
 ## Gotchas proven on this PDI
 
+- **Resolution contract (2026-10-01).** `incident.u_cause` is a String(100). The PDI did not
+  contain the production `close_code` choice `Solved (Permanently)`, so that exact choice was
+  added for test parity. The verifier sends choice display values via `sysparm_input_display_value`
+  and reads back the required close code, cause, and notes.
 - **Scope fencing.** PDI had `incident` read+create+write and `cmdb_rel_ci` read flipped to
   `allowed` on 2026-09-28. The production connector scope can also read `sys_user`; the production
   API account cannot, so only the Script Include resolves names. An uncaught fencing exception
@@ -91,6 +98,12 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
 - **`u_netcool_ticket`** and **`u_generating_alert`** (reference → `em_alert`, added by the user
   on 2026-09-28) both exist on the PDI incident table and are verified on the wait path and the
   fast path.
+- **Principal CI classes (2026-10-01).** The PDI Business Rule `USB Restrict CI for APIs`
+  (`sys_script` `27e2b92f93efcb50c8ebf85bdd03d647`) had a `cmdb_class_info.csv` attachment.
+  Its list now has matching `principal_class=true` and descriptions for 116 classes: 92 existing
+  rows were updated and 24 were added for registered CI tables. Six CSV classes have no PDI table
+  definition (`cmdb_ci_mux_transport` and five `u_cmdb_ci_*` classes). Fourteen CSV rows refer to
+  seven `managed_by_group` names absent from PDI, so those references remain unresolved.
 - **Choice values.** The PDI has no `Monitoring Alert` subcategory choice, so `setChoiceLike`
   falls back to writing the literal, which is what the subflow did.
 - **`sys.scripts.do` echoes the script source** above its output, so a marker-based background

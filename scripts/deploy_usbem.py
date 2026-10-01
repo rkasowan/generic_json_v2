@@ -307,8 +307,8 @@ SCOPE = "x_usbna_usb_event"
 # Management best practices forbid async rules on alert tables) that is filtered down to the
 # alerts this connector cares about before its script runs.
 BR_CONDITION = (
-    "(current.additional_info.indexOf('direct_to_incident') > -1 || "
-    "current.additional_info.indexOf('work_notes') > -1) && "
+    "((current.getValue('additional_info') || '').indexOf('direct_to_incident') > -1 || "
+    "(current.getValue('additional_info') || '').indexOf('work_notes') > -1) && "
     "(current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)"
 )
 

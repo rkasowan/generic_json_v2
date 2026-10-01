@@ -558,18 +558,17 @@ USBEM_DTI.prototype = {
      * not ask for an incident - for a DTI event that note is the incident's, and
      * createIncidentRecord has already written it there.
      *
-     * Two things matter about how the write is made. It runs inside the synchronous after rule on
-     * em_alert, so it must not write through that rule's own `current`: it uses a fresh record
-     * with business rules suppressed, or the update re-enters this very rule. And it consumes the
-     * key it just posted, because otherwise every later write to the alert - every repeat event,
-     * every severity change - would find the same key still sitting in additional_info and append
-     * the same note again.
+     * It uses a fresh record rather than writing through the synchronous after rule's `current`.
+     * The note key is consumed before update, so the follow-up update cannot post the same note
+     * again. Keep workflow/auditing enabled on this update: setWorkflow(false) also disables
+     * auditing, which can prevent the journal entry from appearing in the Activity stream.
      */
     applyAlertWorkNote: function (alertGr, hasIncident) {
         var info;
         var note = '';
         var consumedKey = '';
         var writeGr;
+        var updateSysId;
 
         if (!alertGr || !alertGr.isValidField('work_notes') || !alertGr.isValidField('additional_info')) {
             return false;
@@ -597,13 +596,12 @@ USBEM_DTI.prototype = {
         }
         delete info[consumedKey];
         writeGr.setValue('additional_info', this.core.safeJSONStringify(info));
-        // work_notes is a journal_input: setValue() is silently dropped, dot assignment is what
-        // actually registers the entry. Journal entries are written by the platform, not by a
-        // business rule, so suppressing rules on this update does not lose the note.
+        // Dot assignment is required for journal fields in this scope. setJournalEntry is
+        // blocked by scope fencing on this PDI. The consumed key prevents this update from
+        // appending the same note again when rules run.
         writeGr.work_notes = String(note);
-        writeGr.setWorkflow(false);
-        writeGr.update();
-        return true;
+        updateSysId = writeGr.update();
+        return this.core.looksLikeSysId(updateSysId);
     },
 
     setCorrelationIfPresent: function (incGr, ctx) {
@@ -1037,8 +1035,10 @@ USBEM_DTI.prototype = {
     /**
      * For an incident that already exists, link its generating alert. The fast path creates the
      * incident before Event Management has made the alert, so the reference can only be written
-     * when they are linked. If an incident before-insert rule cleared cmdb_ci while that reference
-     * was empty, restore the resolved CI after persisting u_generating_alert first.
+     * when they are linked. An incident before-insert rule can clear or substitute cmdb_ci while
+     * u_generating_alert is empty, so restore the exact event-resolved CI after persisting
+     * u_generating_alert first. The customer rule can then distinguish an event-generated CI from
+     * an API-supplied CI.
      */
     linkGeneratingAlert: function (incidentSysId, alertSysId, alertGr) {
         var gr;
@@ -1070,7 +1070,7 @@ USBEM_DTI.prototype = {
 
             resolvedCiSysId = this.getResolvedCmdbCiFromAlert(alertGr);
             if (this.core.looksLikeSysId(resolvedCiSysId) && gr.isValidField('cmdb_ci') &&
-                !this.core.hasValue(gr.getValue('cmdb_ci'))) {
+                String(gr.getValue('cmdb_ci') || '') !== String(resolvedCiSysId)) {
                 gr.setValue('cmdb_ci', resolvedCiSysId);
                 gr.update();
                 changed = true;
