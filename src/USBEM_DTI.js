@@ -1013,11 +1013,37 @@ USBEM_DTI.prototype = {
     },
 
     /**
-     * Same, for an incident that already exists. The fast path creates the incident before Event
-     * Management has made the alert, so the reference can only be written when they are linked.
+     * Read the CI resolved for the event from the alert's operational metadata. This is needed
+     * when an incident before-insert rule clears cmdb_ci until u_generating_alert is populated.
      */
-    linkGeneratingAlert: function (incidentSysId, alertSysId) {
+    getResolvedCmdbCiFromAlert: function (alertGr) {
+        var info;
+        var value;
+        if (!alertGr || !alertGr.isValidField || !alertGr.isValidField('additional_info')) {
+            return '';
+        }
+        info = this.core.tryParseJSON(String(alertGr.getValue('additional_info') || ''));
+        if (!this.core.isObject(info)) {
+            return '';
+        }
+        value = info.cmdb_ci;
+        if (this.core.isObject(value)) {
+            value = value.sys_id || value.value || value.id || '';
+        }
+        value = this.core.trimToString(value);
+        return this.core.looksLikeSysId(value) ? value : '';
+    },
+
+    /**
+     * For an incident that already exists, link its generating alert. The fast path creates the
+     * incident before Event Management has made the alert, so the reference can only be written
+     * when they are linked. If an incident before-insert rule cleared cmdb_ci while that reference
+     * was empty, restore the resolved CI after persisting u_generating_alert first.
+     */
+    linkGeneratingAlert: function (incidentSysId, alertSysId, alertGr) {
         var gr;
+        var resolvedCiSysId;
+        var changed = false;
         if (!this.core.looksLikeSysId(incidentSysId) || !this.core.looksLikeSysId(alertSysId)) {
             return false;
         }
@@ -1029,12 +1055,27 @@ USBEM_DTI.prototype = {
             if (!gr.get(incidentSysId)) {
                 return false;
             }
-            if (String(gr.getValue(this.GENERATING_ALERT_FIELD) || '') === String(alertSysId)) {
-                return false;
+            if (String(gr.getValue(this.GENERATING_ALERT_FIELD) || '') !== String(alertSysId)) {
+                gr.setValue(this.GENERATING_ALERT_FIELD, String(alertSysId));
+                gr.update();
+                changed = true;
+
+                // Persist the generator first. A customer rule may validate cmdb_ci against the
+                // saved value rather than the unsaved value on the same GlideRecord update.
+                if (!gr.get(incidentSysId) ||
+                    String(gr.getValue(this.GENERATING_ALERT_FIELD) || '') !== String(alertSysId)) {
+                    return changed;
+                }
             }
-            gr.setValue(this.GENERATING_ALERT_FIELD, String(alertSysId));
-            gr.update();
-            return true;
+
+            resolvedCiSysId = this.getResolvedCmdbCiFromAlert(alertGr);
+            if (this.core.looksLikeSysId(resolvedCiSysId) && gr.isValidField('cmdb_ci') &&
+                !this.core.hasValue(gr.getValue('cmdb_ci'))) {
+                gr.setValue('cmdb_ci', resolvedCiSysId);
+                gr.update();
+                changed = true;
+            }
+            return changed;
         } catch (eLink) {
             // Same as the reuse note: an instance that does not grant this scope write access to
             // incident keeps its data, it just does not get the back-reference.
@@ -1684,7 +1725,7 @@ USBEM_DTI.prototype = {
         ctx.result.alert_link_status = claim.replaced ? 'relinked' : 'linked';
         this.core.tracePush(ctx.debug, 'alert ' + alertGr.getUniqueValue() + ' claimed for incident ' +
             incidentSysId + ' during the request');
-        this.linkGeneratingAlert(incidentSysId, alertGr.getUniqueValue());
+        this.linkGeneratingAlert(incidentSysId, alertGr.getUniqueValue(), alertGr);
         return true;
     },
 
@@ -1772,7 +1813,7 @@ USBEM_DTI.prototype = {
         if (claim.claimed) {
             // The fast path created the incident before this alert existed, so Generating Alert
             // can only be filled in now. A no-op on instances without the field.
-            this.linkGeneratingAlert(preferredIncident.getUniqueValue(), alertGr.getUniqueValue());
+            this.linkGeneratingAlert(preferredIncident.getUniqueValue(), alertGr.getUniqueValue(), alertGr);
             outcome = {
                 status: existingIsTerminal ? 'relinked_from_terminal_incident' :
                     (existingIncident ? 'relinked_to_fast_incident' : 'linked'),
@@ -1856,7 +1897,7 @@ USBEM_DTI.prototype = {
             if (incidentGr) {
                 this.core.mergeDeep(ctx.result, this.core.summarizeIncident(incidentGr));
                 if (alertGr) {
-                    this.linkGeneratingAlert(incidentGr.getUniqueValue(), alertGr.getUniqueValue());
+                    this.linkGeneratingAlert(incidentGr.getUniqueValue(), alertGr.getUniqueValue(), alertGr);
                 }
                 if (this.isReuseStatus(dtiOutcome.status)) {
                     this.applyReuseIncidentNotes(incidentGr, ctx);

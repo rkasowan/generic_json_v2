@@ -73,6 +73,11 @@ the retired `EM - Generic Endpoint Create Incident` subflow.
   duplicate note on reuse. Payload fields override all of it
 - the fast path now claims an already-existing alert during the request
   (`claimAlertForFastIncident`), so a terminal-state relink no longer waits for the rule to fire
+- first-event fast DTI still inserts before an alert exists, so `u_generating_alert` is added by
+  the later alert reconcile. If an incident before-insert rule clears `cmdb_ci` while that
+  reference is empty, the reconcile now persists `u_generating_alert` first and restores a blank
+  `cmdb_ci` from the alert's operational `additional_info`; the limited-access verifier checks
+  the stored CI sys_id through the Incident table query, not its potentially duplicated display name
 - `scripts/deploy_usbem.py` + `tests/usbem_verify.py`, both standard-library only
 
 ## Gotchas proven on this PDI

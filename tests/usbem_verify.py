@@ -633,25 +633,27 @@ class Verifier:
             return first_name.casefold() == expected_folded
         return False
 
-    @staticmethod
-    def ci_reference_matches(value: str, display: str, expected_sys_id: str,
-                             expected_name: str) -> bool:
-        """Allow Incident-only API access to verify a CI by display label when its sys_id is
-        masked. If the API returns a sys_id, it remains the authoritative value to compare."""
-        value = str(value or "").strip()
-        display = str(display or "").strip()
+    def incident_reference_matches_sys_id(self, incident_sys_id: str, field: str,
+                                          expected_sys_id: str):
+        """Check a reference's stored sys_id using Incident access only.
+
+        A display label is not enough for CI verification because different CI classes can
+        share the same name. Filtering the Incident row by the reference sys_id avoids a
+        separate CMDB table read.
+        """
+        incident_sys_id = str(incident_sys_id or "").strip()
         expected_sys_id = str(expected_sys_id or "").strip()
-        expected_name = str(expected_name or "").strip()
-
-        if expected_sys_id and value.casefold() == expected_sys_id.casefold():
-            return True
-        if expected_sys_id and value and re.fullmatch(r"[0-9a-fA-F]{32}", value):
+        if (not re.fullmatch(r"[0-9a-fA-F]{32}", incident_sys_id) or
+                not re.fullmatch(r"[0-9a-fA-F]{32}", expected_sys_id)):
             return False
-
-        # Some restricted REST responses expose the display value in `value` and omit
-        # `display_value`; accept the configured exact CI name in either shape.
-        observed_name = display or value
-        return bool(expected_name and observed_name.casefold() == expected_name.casefold())
+        try:
+            rows = self.sn.table(
+                "incident", f"sys_id={incident_sys_id}^{field}={expected_sys_id}",
+                "sys_id", 1)
+        except ServiceNowError:
+            return None
+        return any(str(row.get("sys_id") or "").casefold() == incident_sys_id.casefold()
+                   for row in rows)
 
     def lookup_incident(self, case: str, payload: dict) -> str:
         response = self.sn.push_event(payload, source=self.source)
@@ -660,6 +662,21 @@ class Verifier:
                    f"{response.get('incident_number') or '(none)'} "
                    f"status={response.get('dti_incident_status') or '(none)'}")
         return sys_id
+
+    def ci_reference_matches_after_link(self, case: str, incident_sys_id: str,
+                                        expected_sys_id: str):
+        matched = self.incident_reference_matches_sys_id(
+            incident_sys_id, "cmdb_ci", expected_sys_id)
+        if matched is False:
+            # The fast path inserts before the alert exists. A production incident rule may
+            # clear cmdb_ci until the reconcile rule writes u_generating_alert, after which the
+            # connector restores the resolved CI. Recheck once that asynchronous link completes.
+            linked = self.wait_any_alert_linked(
+                self.key(case), incident_sys_id, timeout=self.alert_wait)
+            if linked:
+                matched = self.incident_reference_matches_sys_id(
+                    incident_sys_id, "cmdb_ci", expected_sys_id)
+        return matched
 
     def alerts_for(self, key: str):
         # Ordered: a key can end up with more than one alert, because with
@@ -1220,10 +1237,16 @@ class Verifier:
             incident_id = self.lookup_incident(case, payload)
             if incident_id:
                 field, stored, display = self.incident_reference(incident_id, ("cmdb_ci",))
-                self.check("lookups", label + " maps to Incident.cmdb_ci",
-                           field == "cmdb_ci" and self.ci_reference_matches(
-                               stored, display, ci_sys_id, ci_name),
-                           f"{field or 'cmdb_ci'}: {display or stored or '(empty)'}")
+                if ci_sys_id:
+                    matched = self.ci_reference_matches_after_link(case, incident_id, ci_sys_id)
+                    self.check("lookups", label + " maps to the configured CI sys_id",
+                               matched,
+                               f"{field or 'cmdb_ci'}: {display or stored or '(empty)'}; "
+                               "exact Incident reference filter used")
+                else:
+                    self.check("lookups", label + " CI reference identity", None,
+                               "the API-visible display label cannot distinguish duplicate CIs; "
+                               f"set {FIXTURE_ENV_KEYS['ci_sys_id']} in tests/usbem_verify.env")
 
         ci_type = str(self.fixtures.get("ci_type") or "").strip()
         ci_identifier = self.fixtures.get("ci_identifier")
@@ -1234,10 +1257,10 @@ class Verifier:
             if incident_id:
                 field, stored, display = self.incident_reference(incident_id, ("cmdb_ci",))
                 expected_ci = ci_sys_id or ci_name
-                matched = (self.ci_reference_matches(stored, display, ci_sys_id, ci_name) if expected_ci
-                           else bool(stored or display))
+                matched = (self.ci_reference_matches_after_link(case, incident_id, ci_sys_id)
+                           if ci_sys_id else bool(stored or display))
                 self.check("lookups", "camelCase ciType + ciIdentifier resolve",
-                           field == "cmdb_ci" and matched,
+                           matched,
                            f"{display or stored or '(empty)'} "
                            f"(expected {expected_ci or 'a resolved CI'})")
         else:
@@ -1302,7 +1325,8 @@ class Verifier:
                 self.check("lookups", "camelCase usbemOffering resolves",
                            field == "service_offering" and
                            self.reference_matches(stored, display, offering),
-                           f"{display or stored or '(empty)'} (expected {offering})")
+                           f"{display or stored or '(empty)'} (expected {offering}"
+                           + (f" under service {service}" if service else " by exact name") + ")")
         else:
             self.check("lookups", "camelCase usbemOffering resolves", None,
                        f"set {FIXTURE_ENV_KEYS['offering_name']} in tests/usbem_verify.env")
@@ -1360,6 +1384,17 @@ class Verifier:
                    bool(alert_sys_id) and str(row.get("u_generating_alert", "")) == alert_sys_id,
                    f"u_generating_alert={row.get('u_generating_alert') or '(empty)'} "
                    f"alert={alert_sys_id or '(none)'}")
+
+        expected_ci_sys_id = str(self.fixtures.get("ci_sys_id") or "").strip()
+        if expected_ci_sys_id:
+            ci_match = self.incident_reference_matches_sys_id(
+                fast["incident_sys_id"], "cmdb_ci", expected_ci_sys_id)
+            self.check("fields", "configured CI survives the delayed alert link", ci_match,
+                       "Incident.cmdb_ci must equal the configured sys_id after "
+                       "u_generating_alert is populated")
+        else:
+            self.check("fields", "configured CI survives the delayed alert link", None,
+                       f"set {FIXTURE_ENV_KEYS['ci_sys_id']} in tests/usbem_verify.env")
 
         # The fast path creates the incident before the alert exists, so the reference can only be
         # written once they are linked. A second event for the same key exercises that.
