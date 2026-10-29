@@ -3,6 +3,34 @@
 Compact working state for the USBEM genericJsonV2 push connector. Detailed behaviour lives in
 `README.md` and `docs/`; this file is what a future session needs before touching the PDI.
 
+## Documentation target correction (2026-10-29)
+
+- Owner explicitly requires implementation and all documentation/KB/attachments in the same
+  named PDI. Do not let a default shared connection or older KB override the requested target.
+  This durable preference is also in root AGENTS.md and the compact root notes index.
+- Correct DTI article: **KB0010015 on dev392825**, sys_id
+  `7433ede097d457105fb3ba6de053af9b`, IT base `a7e8a78bff0221009b20ffffffffff17`, Global.
+  Article1.3.0 / runtime2026.10.29.2, active/latest/published, exact body readback passed.
+  `display_attachments=true` was explicitly set and read back; without it, this target defaults
+  false and hides attached downloads in the reader UI. All five links now render in kb_view.
+- All five DEV attachments downloaded and SHA-256 matched repository bytes: Python
+  `f343e92497d457105fb3ba6de053aff4` (40089 bytes), env template
+  `c4532d2497d457105fb3ba6de053af57` (4538), current `.2` report
+  `14532d2497d457105fb3ba6de053af5d` (15212), original extended report
+  `50532d2497d457105fb3ba6de053af63` (8673), historical comprehensive failure report
+  `6c532d2497d457105fb3ba6de053afd8` (14283). Hashes are unchanged from their source files.
+  The five actual reader-facing `sys_attachment.do` links also returned exact matching bytes,
+  not just the Table API downloads; the published reader page renders all five links.
+- Original dev382837 KB0010025 and its attachments were left unchanged, not deleted.
+  No runtime, security, or test records changed during this documentation correction.
+- KB publisher now requires an explicit expected HTTPS origin and rejects connection/target
+  mismatches before any network call. Do not point it at default credentials and assume it
+  selected DEV. This DEV publication used the existing authorized browser session; it did not
+  change the shared .env or copy credentials between instances.
+- Guard/visibility validation: 12 focused offline tests pass; full Python discovery passes
+  77 tests, with changed-file syntax and git diff checks clean. Connector/runtime source and
+  the earlier 204-test release evidence remain unchanged by this documentation-only correction.
+
 ## Release 2026.10.29.2 (2026-10-29)
 
 - Corrected-path DEV retest PASS, not a universal production/concurrency guarantee. See

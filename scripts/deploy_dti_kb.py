@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import base64
 import html
 import json
@@ -20,6 +21,41 @@ SOURCE = ROOT / "generic_json_v2" / "kb" / "generic_json_v2_dti_api_and_tests.md
 TITLE = "Generic JSON V2 Direct To Incident API, Business Rule, and Python Testing"
 # Stable migration lookup: update the existing article and retain its number/attachments.
 LEGACY_TITLE = "Generic JSON V2 Direct To Incident Linux Synthetic"
+
+
+def instance_origin(value: str) -> str:
+    """Validate an explicit HTTPS origin without silently discarding URL parts."""
+    message = "expected an HTTPS instance origin without userinfo, path, query or fragment"
+    if (value != value.strip() or any(character.isspace() or ord(character) < 32 or ord(character) == 127
+                                    for character in value)
+            or "\\" in value or "?" in value or "#" in value):
+        raise argparse.ArgumentTypeError(message)
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port  # Validate malformed and out-of-range ports as well.
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+                or parsed.password is not None or parsed.path not in ("", "/")
+                or parsed.query or parsed.fragment or parsed.netloc.endswith(":")):
+            raise ValueError(message)
+        host = parsed.hostname.lower()
+        authority_host = "[" + host + "]" if ":" in host else host
+        suffix = parsed.netloc.lower()[len(authority_host):]
+        if ((port is None and suffix) or
+                (port is not None and not re.fullmatch(r":[0-9]+", suffix))):
+            raise ValueError(message)
+    except ValueError:
+        raise argparse.ArgumentTypeError(message) from None
+    return urllib.parse.urlunsplit(("https", parsed.netloc.lower(), "", "", ""))
+
+
+def verify_target(expected: str, client: Client, admin: ServiceNow) -> None:
+    """Fail before any query or write when a connection targets another instance."""
+    try:
+        actual = (instance_origin(client.base), instance_origin(admin.instance))
+    except argparse.ArgumentTypeError:
+        raise RuntimeError("A configured publishing target is not a valid HTTPS origin") from None
+    if actual != (expected, expected):
+        raise RuntimeError("Publishing connections do not match --expected-instance; no request was sent")
 
 
 def load_env() -> None:
@@ -83,11 +119,14 @@ def markdown_to_html(source: str) -> str:
     return "\n".join(output)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--expected-instance", required=True, type=instance_origin,
+                        help="intended HTTPS instance origin; must match both publishing connections")
+    args = parser.parse_args(argv)
     client = Client()
     admin = ServiceNow()
-    if admin.instance != client.base:
-        raise RuntimeError("Table API and publishing session target different instances")
+    verify_target(args.expected_instance, client, admin)
     bases = client.query("kb_knowledge_base", "active=true^ORDERBYtitle", "sys_id,title", 10)
     if not bases:
         raise RuntimeError("No active Knowledge base found")
@@ -102,6 +141,7 @@ def main() -> None:
         "article_type": "text",
         "workflow_state": "published",
         "active": True,
+        "display_attachments": True,
         "valid_to": "2099-12-31",
     }
     if existing:
@@ -116,14 +156,18 @@ def main() -> None:
         + "k.setValue('text'," + json.dumps(body) + ");"
         + "k.setValue('kb_knowledge_base'," + json.dumps(preferred["sys_id"]) + ");"
         + "k.setValue('valid_to','2099-12-31');k.setValue('workflow_state','published');"
-        + "k.setValue('active','true');k.update();gs.print('DTI_KB_PUBLISHED');",
+        + "k.setValue('active','true');k.setValue('display_attachments','true');"
+        + "k.update();gs.print('DTI_KB_PUBLISHED');",
         "global",
     )
-    rows = client.query("kb_knowledge", "sys_id=" + sys_id, "sys_id,number,short_description,workflow_state,active,latest,text", 1)
+    rows = client.query("kb_knowledge", "sys_id=" + sys_id,
+                        "sys_id,number,short_description,workflow_state,active,latest,display_attachments,text", 1)
     if (not rows or rows[0].get("workflow_state") != "published" or
             str(rows[0].get("active")).lower() != "true" or
+            str(rows[0].get("display_attachments")).lower() != "true" or
             str(rows[0].get("latest")).lower() != "true" or rows[0].get("short_description") != TITLE):
-        raise RuntimeError("Knowledge article did not read back with the expected title, active, latest and published state")
+        raise RuntimeError("Knowledge article did not read back with the expected title, active, latest, "
+                           "published and visible-attachments state")
     if html.unescape(rows[0].get("text", "")) != html.unescape(body):
         raise RuntimeError("Knowledge article body does not match the source")
     rows[0].pop("text", None)

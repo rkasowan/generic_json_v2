@@ -60,7 +60,10 @@ restore the retired queued-event/Script Action linker.
   `tests/test_wrapper_passthrough.js`, `tests/test_listener_shape_contract.js`, and
   `tests/test_deploy_usbem.py`: focused local behavior and installer tests.
 - `kb/generic_json_v2_dti_api_and_tests.md`: Knowledge source for API, BR, and laptop testing.
-- `scripts/deploy_dti_kb.py`: update the existing article, preserving its KB identity.
+- `scripts/deploy_dti_kb.py`: publish/update in the implementation's explicitly selected target,
+  preserving that target's existing KB identity. Pass `--expected-instance https://<target>.service-now.com`;
+  both configured connections must match before any network call. It enables reader-visible
+  attachments and verifies that flag after publication. Copy/verify attachment bytes separately.
 - `docs/validation-2026-10-29.md`: DEV runtime/readback evidence and known limitations.
 - `docs/validation-2026-10-29-comprehensive.md`: prior comprehensive run and defects; preserve
   alongside the new release's retest evidence rather than rewriting its historical results.
@@ -80,3 +83,8 @@ table is part of this package. Optional `--include-concurrency` stress testing f
 requests create different incidents; the normal suite does not claim concurrency safety.
 
 Instance URLs, credentials, sys_ids, users, roles, and Knowledge numbers are environment-specific and are not portable artifacts.
+
+Current matching DEV article: KB0010015 on dev392825, sys_id
+`7433ede097d457105fb3ba6de053af9b`. Article1.3.0 is active/latest/published with all five
+attachments visible; all five downloads match repository bytes. The earlier dev382837
+KB0010025 is a separate historical copy and is not the documentation target for dev392825 work.

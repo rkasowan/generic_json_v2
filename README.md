@@ -10,6 +10,11 @@ It closes the prior wrapped-field, follow-up Alert note, shape-validation, debug
 and installer findings. This is not production-identity or concurrency certification:
 the accepted simultaneous-first-event race remains unchanged. Retest each target before promotion.
 
+The matching DEV documentation is published as
+[KB0010015 on dev392825](https://dev392825.service-now.com/kb_view.do?sys_kb_id=7433ede097d457105fb3ba6de053af9b),
+with the Python test, env template, and all three validation reports visible and downloadable.
+Implementation and documentation must use the same explicitly selected PDI.
+
 Every script in this project carries that version, and the endpoint reports all of them in every
 response under `versions`, so you can tell what an instance is actually running without opening a
 single record:
@@ -659,7 +664,8 @@ Runtime:
 Tooling:
 
 - `scripts/deploy_usbem.py` — push the repo to an instance and read back its versions
-- `scripts/deploy_dti_kb.py` — publish/update the DTI API and test guide
+- `scripts/deploy_dti_kb.py` — publish/update the DTI API and test guide; requires an explicit
+  `--expected-instance https://<target>.service-now.com` matching both configured connections
 - `tests/usbem_verify.py` — live end-to-end verification, one self-contained file
 - `tests/test_ci_identifier_precedence.py` — focused laptop regression check for identifier precedence
 - `tests/ci_identifier_test.env.example` — non-secret configuration template for that check
