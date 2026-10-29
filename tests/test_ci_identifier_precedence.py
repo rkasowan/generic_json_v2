@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Observe CI precedence and duplicate DTI behavior through the real inbound-event API.
 
-Requires connector POST plus incident/em_event read access. Creates ten uniquely tagged
-events and expects six incidents; retains all evidence. All cases use fast DTI without a
-wait-for-incident key. Defaults take at least four minutes
-because every phase must remain correct for 30 seconds. Includes three simultaneous first
-events to expose duplicate races. No POST is retried. This is a bounded API regression suite;
-it does not prove email delivery or every production rule and incident lifecycle transition.
+Requires connector POST plus incident/em_event read access. The default five fast-DTI cases
+create seven tagged events and expect five incidents; all evidence is retained. A complete
+default run takes at least 3.5 minutes: seven phases remain correct for 30 seconds each.
+Control failures stop earlier. All payloads omit wait-for-incident keys. --include-concurrency
+adds a three-request first-event stress case (ten total events, six expected incidents).
+Simultaneous first events can create duplicate incidents; this accepted limitation is reported
+even when the default suite passes. No POST is retried. This bounded suite does not prove
+concurrent safety, email delivery, or every production rule and incident lifecycle transition.
 """
 
 from __future__ import annotations
@@ -218,6 +220,7 @@ class Settings:
     stable_seconds: float = 30.0
     poll_seconds: float = 3.0
     request_timeout: float = 90.0
+    include_concurrency: bool = False
 
 
 class CheckFailed(RuntimeError):
@@ -465,8 +468,10 @@ class Runner:
             ("fast_camel_conflict", dict(identity, cmdb_ci=settings.decoy_name), settings.expected_id, False, True, 1),
             ("fast_snake_conflict", {"ci_type": settings.ci_type, "ci_identifier": settings.identifier,
                                      "cmdb_ci": settings.decoy_name}, settings.expected_id, True, True, 1),
-            ("concurrent_fast_duplicates", dict(identity, cmdb_ci=settings.decoy_name), settings.expected_id, False, False, 3),
         ]
+        if settings.include_concurrency:
+            cases.append(("concurrent_fast_duplicates", dict(identity, cmdb_ci=settings.decoy_name),
+                          settings.expected_id, False, False, 3))
         started = self.clock()
         results = []
         stop_reason = ""
@@ -492,8 +497,12 @@ class Runner:
                 "phase_timeout_seconds": settings.timeout, "stable_seconds": settings.stable_seconds,
                 "fast_post_max_seconds": settings.fast_post_max_seconds,
                 "records_retained": True, "post_retries": 0,
-                "scope": "Fast DTI CI precedence, incident fields, sequential duplicates and a three-request concurrent first-event race, using records visible to the test identity; not legacy wait mode, email delivery or complete incident lifecycle",
-                "concurrency_note": "The race case detects the known concurrent fast-path duplicate defect; a single passing race does not prove every interleaving."}
+                "scope": "Fast DTI CI precedence, incident fields and sequential duplicates, using records visible to the test identity; not legacy wait mode, email delivery or complete incident lifecycle",
+                "concurrency_included": settings.include_concurrency,
+                "accepted_residual_limitation": "Simultaneous first events for the same message key can create duplicate incidents. A default pass does not assert concurrent safety.",
+                "concurrency_note": ("The optional race case fails on divergent incidents; one passing race does not prove every interleaving."
+                                     if settings.include_concurrency else
+                                     "Concurrent first-event stress was not requested; use --include-concurrency to exercise the accepted limitation.")}
 
 
 def configuration(args, values: dict) -> tuple[str, dict, Settings]:
@@ -564,6 +573,10 @@ def configuration(args, values: dict) -> tuple[str, dict, Settings]:
                         expected_category=expected_category, subcategory=subcategory, expected_subcategory=expected_subcategory,
                         impact=impact, urgency=urgency, assignment_group=group, expected_assignment_group_id=expected_group,
                         expected_release=args.expect_version or get("USBEM_EXPECTED_RELEASE", EXPECTED_RELEASE))
+    concurrency_value = get("USBEM_TEST_INCLUDE_CONCURRENCY", "false").strip().lower()
+    if concurrency_value not in ("true", "false", "1", "0", "yes", "no"):
+        raise ValueError("USBEM_TEST_INCLUDE_CONCURRENCY must be true or false")
+    settings.include_concurrency = args.include_concurrency or concurrency_value in ("true", "1", "yes")
     for name, argument, key, default in (
             ("timeout", args.timeout, "USBEM_TEST_TIMEOUT_SECONDS", 120.0),
             ("fast_post_max_seconds", args.fast_post_max_seconds, "USBEM_FAST_POST_MAX_SECONDS", 10.0),
@@ -601,6 +614,7 @@ def main() -> int:
     parser.add_argument("--ca-bundle", default="", help="PEM CA bundle for work laptop corporate trust roots")
     parser.add_argument("--insecure", action="store_true", help="disable TLS certificate verification (last resort)")
     parser.add_argument("--report-file", default="", help="save the same credential-free JSON report to this path")
+    parser.add_argument("--include-concurrency", action="store_true", help="also stress three simultaneous first events; divergent incidents fail")
     args = parser.parse_args()
     try:
         values = read_env(Path(args.env_file).expanduser())

@@ -27,6 +27,9 @@ Compact working state for the USBEM genericJsonV2 push connector. Detailed behav
 - dev392825 default caller property now points to the active Event Management user
   `9d5de9e5930022005bc5f179077ffb07`. Explicit/default caller fast checks created
   `INC0010014` / `INC0010015` with valid local software/os/2/2 choices and the Hardware group.
+- Owner explicitly declined a claim table and accepted the simultaneous-first-event race.
+  Keep fast API creation + correlation breadcrumb + alert BR linking. The five-case standard
+  laptop suite covers sequential duplicates; `--include-concurrency` is an optional stress test.
 
 ## Live objects (dev382837)
 

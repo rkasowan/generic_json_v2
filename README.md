@@ -578,28 +578,29 @@ OAuth client credentials, and a corporate CA bundle. Existing production OAuth s
 selected with `--env-file tests/usbem_verify.env --profile itsmnowDEVworker` after adding the
 focused fixture keys from the supplied template. Keep filled env files private.
 
-All six cases use fast DTI and omit the wait key. They require a valid incident sys_id promptly
+All five standard cases use fast DTI and omit the wait key. They require a valid incident sys_id promptly
 (default 10-second POST budget), then poll stored Incident and Event records separately. Normal
 operation creates the incident, stamps the message-key breadcrumb in `correlation_id`, returns,
 and lets the alert Business Rule link the later alert. The wait key remains legacy compatibility.
 
 Name-only and identifier-only controls prove the fixtures before conflicting-name tests run.
-The suite then tests explicit sys_id precedence, camelCase and snake_case inputs, sequential
-duplicates, and three simultaneous first events. Every observation verifies the exact CI,
+The suite then tests explicit sys_id precedence, camelCase and snake_case inputs, and sequential
+duplicates. Every observation verifies the exact CI,
 correlation ID, caller, category, subcategory, impact, urgency, short description, description,
 and configured assignment group. Each phase must remain correct for 30 seconds within its
-120-second deadline. A complete successful suite takes at least four minutes plus request time.
+120-second deadline. A complete successful standard suite takes at least 3.5 minutes plus request time.
 Timeouts and observation intervals are configurable. No POST is automatically retried.
 
-The suite retains ten tagged events and expects six incidents when it passes. Exit codes are
+The standard suite retains seven tagged events and expects five incidents when it passes. Exit codes are
 `0` pass, `2` functional failure, and `3` configuration/access/transport failure. It reads only
 `em_event` and `incident` and does not require CMDB, Scripts - Background, or deletion access.
 It does not prove production-specific rules, all concurrency interleavings, or email delivery.
 
-The current release has a reproduced concurrent-first-event defect: three simultaneous requests
-created two incidents in DEV. The new suite treats this as failure. See
-[the extended live validation report](docs/validation-2026-10-29.md); hold production promotion
-until the concurrency correction is validated.
+The API-and-BR design retains a known simultaneous-first-event race: three concurrent requests
+created two incidents in DEV. The owner accepted this limitation and explicitly declined a new
+claim table. The standard suite does not claim concurrency safety. Use `--include-concurrency`
+for an optional stress check, which fails if requests create different incidents. See
+[the extended live validation report](docs/validation-2026-10-29.md).
 
 ## Known gaps
 

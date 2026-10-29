@@ -74,23 +74,25 @@ The normal contract is fast DTI: create an Incident, stamp the message key in `c
 return its sys_id promptly, then let the alert Business Rule link the alert after it arrives.
 The laptop suite omits all wait keys. The wait key is retained only for legacy callers.
 
-The test checks six cases: name and identifier fixture controls, explicit CI sys_id precedence,
-camelCase and snake_case conflicting-name inputs, sequential duplicate reuse, and three
-simultaneous first events. Every stored Incident must have the expected CI, caller, category,
+The standard test checks five cases: name and identifier fixture controls, explicit CI sys_id
+precedence, and camelCase and snake_case conflicting-name inputs with sequential duplicate reuse.
+Every stored Incident must have the expected CI, caller, category,
 subcategory, urgency, impact, short description, description, and correlation breadcrumb.
 Configured assignment groups are verified by sys_id. The script uses connector POST and read
 access to `em_event` and `incident`; it retains all records and does not require deletion access.
 
-Allow at least four minutes for a complete passing run: each of eight phases requires 30 stable
+Allow at least 3.5 minutes for a complete passing run: each of seven phases requires 30 stable
 seconds, separately from the prompt POST response. Timeouts and observation windows are
 configurable. Basic/base64 and OAuth credentials and corporate CA bundles are supported.
 An incomplete or failed check cannot return PASS. Exit codes are 0 pass, 2 functional failure,
 and 3 configuration/access/transport error. It does not test email delivery.
 
-Current gate: extended actual HTTP testing on dev392825 took 263.786 seconds and confirmed the CI
+Known limitation: extended actual HTTP testing on dev392825 took 263.786 seconds and confirmed the CI
 precedence fix, but three concurrent first fast-DTI events created two Incidents (`INC0010012`
-and `INC0010013`). Sequential duplicates reused one Incident. The strengthened laptop test
-fails this race. Hold production promotion until a concurrency correction is validated.
+and `INC0010013`). Sequential duplicates reused one Incident. The owner accepted this residual
+race and selected the existing fast API-and-BR design without a claim table. The standard suite
+does not assert concurrent-first-event safety. Use `--include-concurrency` for an optional stress
+test; it reports differing or duplicate incidents as a failure.
 The attached `validation-2026-10-29.md` records the live method, results, retained evidence, and
 limits. Production-specific identities, rules, choices, and field access still need target testing.
 

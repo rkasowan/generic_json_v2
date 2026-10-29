@@ -262,19 +262,45 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(self.client.pushes), 1)
         self.assertTrue(all(row["status"] == "skipped" for row in result["cases"][1:]))
 
-    def test_full_matrix_is_fast_only_with_both_aliases_and_concurrency(self):
+    def test_default_matrix_is_fast_only_with_both_aliases_and_no_stress(self):
         result = self.runner.run()
         self.assertEqual(result["status"], "pass")
-        self.assertEqual(len(result["cases"]), 6)
-        self.assertEqual(len(self.client.pushes), 10)
-        self.assertEqual(result["elapsed_seconds"], 24)
-        self.assertEqual(result["cases"][-1]["phases"][0]["actual_event_count"], 3)
+        self.assertEqual(len(result["cases"]), 5)
+        self.assertEqual(len(self.client.pushes), 7)
+        self.assertEqual(result["elapsed_seconds"], 21)
+        self.assertFalse(result["concurrency_included"])
+        self.assertIn("does not assert concurrent safety", result["accepted_residual_limitation"])
         self.assertTrue(any(payload.get("direct_to_incident") and "ci_identifier" in payload
                             for payload in self.client.pushes))
         self.assertTrue(all("dti_wait_for_incident" not in payload and "dtiWaitForIncident" not in payload
                             for payload in self.client.pushes))
         self.assertTrue(all(phase["actual_incident_fields"] == case["expected_incident_fields"]
                             for case in result["cases"] for phase in case["phases"]))
+
+    def test_optional_stress_adds_sixth_case_and_three_concurrent_submissions(self):
+        self.settings.include_concurrency = True
+        result = self.runner.run()
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(len(result["cases"]), 6)
+        self.assertEqual(len(self.client.pushes), 10)
+        self.assertEqual(result["elapsed_seconds"], 24)
+        self.assertTrue(result["concurrency_included"])
+        self.assertEqual(result["cases"][-1]["name"], "concurrent_fast_duplicates")
+        self.assertEqual(result["cases"][-1]["phases"][0]["actual_event_count"], 3)
+
+    def test_optional_stress_divergent_incidents_still_fail_suite(self):
+        self.settings.include_concurrency = True
+        original_push = self.client.push
+
+        def divergent_only_in_stress(source, payload, timeout):
+            self.client.different_concurrent = payload["message_key"].endswith("-6")
+            return original_push(source, payload, timeout)
+
+        self.client.push = divergent_only_in_stress
+        result = self.runner.run()
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(result["concurrency_included"])
+        self.assertIn("different incidents", result["cases"][-1]["reason"])
 
     def test_required_incident_fields_must_be_nonempty_and_match(self):
         original_rows = self.client.rows
@@ -362,7 +388,8 @@ class TransportConfigTests(unittest.TestCase):
     def args(self, **overrides):
         values = {"profile": "", "instance": "", "user": "", "password": "", "source": "",
                   "expect_version": "", "timeout": None, "stable_seconds": None,
-                  "poll_seconds": None, "request_timeout": None, "fast_post_max_seconds": None}
+                  "poll_seconds": None, "request_timeout": None, "fast_post_max_seconds": None,
+                  "include_concurrency": False}
         values.update(overrides)
         return argparse.Namespace(**values)
 
@@ -384,6 +411,15 @@ class TransportConfigTests(unittest.TestCase):
             instance, auth, _ = runner.configuration(self.args(profile="itsmnowDEVworker"), values)
             self.assertEqual(instance, "https://dev.service-now.com")
             self.assertEqual(auth["mode"], "oauth")
+
+    def test_concurrency_opt_in_can_be_selected_by_flag_or_env(self):
+        with patch.dict(os.environ, {}, clear=True):
+            _, _, settings = runner.configuration(self.args(), self.config())
+            self.assertFalse(settings.include_concurrency)
+            _, _, settings = runner.configuration(self.args(include_concurrency=True), self.config())
+            self.assertTrue(settings.include_concurrency)
+            _, _, settings = runner.configuration(self.args(), dict(self.config(), USBEM_TEST_INCLUDE_CONCURRENCY="true"))
+            self.assertTrue(settings.include_concurrency)
 
     def test_unsafe_or_ambiguous_fixture_configurations_rejected(self):
         changes = [{"USBEM_DECOY_CI_SYS_ID": EXPECTED}, {"USBEM_CI_IDENTIFIER_JSON": '{"serial_number":{}}'},

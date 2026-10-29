@@ -13,7 +13,8 @@ All notable project updates should be recorded here when work is completed and p
 - hardened the laptop test with fast-only requests, fixture controls, prompt response budgets,
   stable persisted-field observation, OAuth/Basic support, and required Incident field checks
 - real inbound HTTP validation over 263.786 seconds reproduced the known concurrent-first-event
-  defect: three requests created two incidents; this remains a production promotion gate
+  defect: three requests created two incidents; the owner accepted this residual API-and-BR
+  limitation without a new table, and concurrency stress remains an explicit optional test
 
 ## 2026.09.30.1 - 2026-09-30
 

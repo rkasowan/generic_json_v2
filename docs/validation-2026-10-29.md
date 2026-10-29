@@ -1,9 +1,11 @@
 # Generic JSON V2 extended DEV validation — 2026-10-29
 
-Overall result: **FAIL — concurrent first-event DTI can create duplicate incidents.**
+Extended stress result: **FAIL — concurrent first-event DTI can create duplicate incidents.**
 
-The CI identifier precedence correction passes the exercised live cases. The connector is not
-ready to be described as safe against simultaneous duplicate first events.
+The CI identifier precedence correction and required-field checks pass the exercised live cases.
+The owner accepted the simultaneous-first-event limitation on 2026-10-29 and explicitly selected
+the fast API plus correlation-based Business Rule design without a new claim table. Standard
+acceptance covers sequential duplicates; it makes no concurrent-first-event guarantee.
 
 ## Live method and duration
 
@@ -60,7 +62,8 @@ CI. This is a duplicate-creation race, independent of the CI precedence correcti
 `getOrCreateFastIncident` queries for an existing incident, then inserts when none is visible.
 Two requests can both complete the query before either insert is visible. Sequential replay
 does not exercise that interval. The older full verifier's concurrent case was observational
-(`passed=None`); the strengthened laptop suite treats this outcome as a failure.
+(`passed=None`); the strengthened laptop suite's optional concurrency check treats this outcome
+as a failure. Enable it explicitly with `--include-concurrency`.
 
 The existing optional DTI map is not configured and no map table exists on this DEV instance.
 Enabling its property alone is not a safe correction: it lacks validated schema and uniqueness,
@@ -72,7 +75,8 @@ transition, and fail-closed behavior on uncertain ownership. A reviewed adjacent
 uses a unique SHA-256 key plus deterministic registry sys_id. Adopting that pattern here adds
 scoped schema, installer, privileges, rollback, and production-transfer requirements. A second
 lookup or deletion of a losing incident cannot retract notifications or Flows already triggered
-by its insert. Hold production promotion until that correction passes concurrent replay.
+by its insert. This expansion was declined by the owner; no new table or mutex was added.
+The delivered design retains this documented race rather than claiming exactly-once creation.
 
 ## Fast-only required Incident fields
 
@@ -89,6 +93,14 @@ Hardware assignment group, correlation breadcrumb, and later alert-to-incident l
 verified. Thirteen observations per incident spanned 96.629 and 96.640 seconds with no drift.
 The requests began at `2026-10-29T12:54:21.513Z`; final readback was
 `2026-10-29T12:57:16.522Z`.
+
+Follow-up sequential replays returned the same `INC0010014` and `INC0010015` in 0.389 and
+0.193 seconds. Their later field/link observations continued to pass. A third fast-only
+snake_case case created `INC0010016` in 1.096 seconds and replayed it in 0.292 seconds.
+At the first read, 7.483 seconds after submission, all required fields were correct while the
+alert had not landed yet. Once the alert arrived, it linked to that same Incident; the linked
+CI and all required fields then remained correct over 67.260 seconds. This is the intended
+separation between a prompt API response and later Business Rule reconciliation.
 
 The default caller property was missing on this clean DEV install. It is now configured as
 `x_usbna_usb_event.default_caller_sys_id=9d5de9e5930022005bc5f179077ffb07`, the existing active
