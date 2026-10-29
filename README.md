@@ -1,32 +1,75 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.10.29.2`
+Repo version: `2026.10.29.3`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
-Release gate: **corrected-path DEV retest PASS** for `2026.10.29.2` on dev392825.
+Current laptop deliverable: **Python suite `1.2.0`, published article `1.6.0`**, with an explicit
+`--access-profile production` mode for connector POST + Event R + Alert RW + Incident RW.
+Use this mode with the existing production identity; it never requests reference/admin tables,
+provisions data, or falls back to an administrator. The runtime remains `2026.10.29.3`.
+Focused DEV validation under the enforced three-table request boundary is complete. The matching
+DEV article is published and its body/current attachment downloads are verified. No actual production instance or restricted
+production identity is claimed tested.
+Local validation passed 416 Python and 234 JavaScript checks (650 total), including 102
+production unit methods. The independent native-Alert model exercised all 85 actual production
+callbacks: 84 passed and one reported the accepted concurrency limitation. Its 102 modeled cases
+made 119 connector calls, 11 negative probes, 24 formatted-note reads, three debug companions
+and five owned PATCH operations. That simulated result is not full live production acceptance.
+The frozen program SHA-256 is `68db4a360ae112c223e327bc5a51f1f5bc2e77703353b42a96dc2d3bf4f5d280`.
+Its exact-file focused DEV run completed 20 checks over 33 cases in 725.494 seconds: 19 PASS,
+one accepted concurrency limitation, zero failures/errors/skips. Maximum POST was 1.137 seconds;
+minimum case stability was 34.813 seconds, with eight formatted-note observations and three
+debug companions. Three simultaneous first requests created three test Incidents, reproducing
+the accepted race. Independent GET-only readback passed: three queries, zero writes, 45 retained
+Events all Processed (42 primary + three debug), 15 Incidents, 25 Alerts and 98 required-field
+checks; expected stored fields/links remained unchanged. This is not full 85-feature live
+acceptance or actual production-identity proof. See [the scoped validation report](docs/validation-2026-10-29-production-access.md).
+
+The separate suite `1.1.0` provisioned-fixture administrative full retest remains incomplete,
+including the unapproved business-application read privilege and default-CI prerequisites.
+Article `1.5.0` was a pending source draft, not a published milestone. That broader gate does
+not prevent delivery of the separately scoped three-table production test. No grant or runtime
+change is part of this production-test update.
+
+The prior suite `1.0.0` exact-file full Python run completed
+in 1749.514 seconds: 75 features passed, one failed, nine were skipped, and one retained the
+accepted limitation (93 cases; no errors). Its raw status is `fail`, exit 2. The sole failed
+assertion used our incorrect lowercase default-category fixture; the same-file corrected-fixture
+supplemental defaults check passed both cases. That does not rewrite the raw full failure or
+close the nine unavailable-feature gaps. No clean full-suite pass is claimed.
+
+Historical corrected-path DEV retest PASS belongs to `2026.10.29.2` only.
 [The release retest](docs/validation-2026-10-29.2.md) records 714.405 seconds, 50 positive
 scenarios, ten malformed-payload probes, exact six-source readback, and 204 passing local tests.
 It closes the prior wrapped-field, follow-up Alert note, shape-validation, debug-privilege,
 and installer findings. This is not production-identity or concurrency certification:
 the accepted simultaneous-first-event race remains unchanged. Retest each target before promotion.
 
-The matching DEV documentation is published as
+The existing matching DEV Knowledge article is
 [KB0010015 on dev392825](https://dev392825.service-now.com/kb_view.do?sys_kb_id=7433ede097d457105fb3ba6de053af9b),
-with the Python test, env template, and all three validation reports visible and downloadable.
+Article `1.6.0` is published, active, latest and reader-verified there, with reader-visible
+attachments and an exact normalized body readback. Current program/configuration and evidence uploads were byte-verified
+through authenticated API and reader downloads; anonymous download requests do not return files.
+The reader renders actual download links for the Python program, production env/catalog and usage
+guide. Only the previous Python/common-env attachments were replaced, with recovery copies
+retained; historical reports remain intact. Article `1.4.0` is prior historical evidence, and
+`1.5.0` was never published. The provisioned administrative full retest remains incomplete.
+Public Git publication is authorized but not yet claimed complete. Full machine reports
+and filled fixtures remain private to the matching PDI/ignored local evidence.
 Implementation and documentation must use the same explicitly selected PDI.
 
-Every script in this project carries that version, and the endpoint reports all of them in every
+Every modular runtime component carries that version, and the endpoint reports its API components in every
 response under `versions`, so you can tell what an instance is actually running without opening a
 single record:
 
 ```json
-"version": "2026.10.29.2",
-"versions": {"listener": "2026.10.29.2", "core": "2026.10.29.2",
-             "lookups": "2026.10.29.2", "debug": "2026.10.29.2", "dti": "2026.10.29.2"}
+"version": "2026.10.29.3",
+"versions": {"listener": "2026.10.29.3", "core": "2026.10.29.3",
+             "lookups": "2026.10.29.3", "debug": "2026.10.29.3", "dti": "2026.10.29.3"}
 ```
 
 The business rule has no response to report into, so it logs its version with every outcome
-(`USBEM fast DTI alert reconcile [v2026.10.29.2] outcome: ...`).
+(`USBEM fast DTI alert reconcile [v2026.10.29.3] outcome: ...`).
 
 The repo release version is separate from the locked standalone ServiceNow transform in
 `standalone/genericMappedJson_transform.js`, which remains `2026-03-18a` for the final path.
@@ -43,7 +86,14 @@ The repo also includes ATF assets for environment testing:
 - `docs/atf_testing.md`
 
 The DTI deliverable is the connector API, its correlation-based alert reconcile Business Rule,
-and the standalone Python regression test in `tests/test_ci_identifier_precedence.py`.
+and one comprehensive standalone Python tester in `tests/test_ci_identifier_precedence.py`.
+The historical filename retains the broader comprehensive manifest by default; select
+`--access-profile production` for the three-table production functional manifest. Download that
+one program plus the production env and fixture-catalog templates from the same DEV KB.
+Runtime `.3` is already deployed and six-source readback matched. Prior reports are historical
+runtime evidence, not a pass for the current tester. Matching DEV article `1.6.0`, its current
+test/configuration downloads and scoped validation evidence are published and reader-verified.
+Historical `1.4.0` reports remain; no article `1.5.0` publication is claimed.
 The test runs on demand from a work laptop; no Linux service, root account, scheduler, or
 monitoring email setup is required. See [the DTI API and test guide](kb/generic_json_v2_dti_api_and_tests.md).
 
@@ -190,22 +240,22 @@ you want the alert identifiers back in the same response.
 ### Incident fields
 
 The endpoint replaces a direct write to the incident table, so send incident fields under their
-real names; choice and reference fields are mapped to their stored values:
+real names. Prefer the target's stored choice values and verify actual stored references/choices:
 
 ```json
 {
   "source": "MyApp Monitor", "node": "VM1234", "severity": "1",
   "description": "Service is down", "direct_to_incident": "true",
-  "caller_id": "Abel Tuter", "category": "Software", "subcategory": "Email",
-  "contact_type": "Integration", "work_notes": "note for the incident",
+  "caller_id": "Abel Tuter", "category": "software", "subcategory": "email",
+  "contact_type": "integration", "work_notes": "note for the incident",
   "alert_work_notes": "note for the alert"
 }
 ```
 
 - any field that exists on `incident` is accepted; `sys_id`, `number`, `correlation_id` and
   `correlation_display` are owned by the connector and ignored
-- a 32-character value is used as a sys_id; choice fields resolve display values, and `caller_id`
-  / `assigned_to` accept a sys_id or exact full name
+- a 32-character value is used as a sys_id; other scalar fields use the display setter, whose
+  stored result must be checked on the target; `caller_id` / `assigned_to` accept a sys_id or exact full name
 - what was applied and what was ignored comes back as `incident_fields_applied` and
   `incident_fields_skipped`
 - `work_notes` goes on the incident, `alert_work_notes` on the alert; the legacy
@@ -493,136 +543,241 @@ Typical response fields:
 
 ## Testing
 
-```bash
-python3 tests/usbem_verify.py
-```
-
-To exercise a different listener, set its REST API `source` parameter explicitly. For example,
-on the PDI the original listener is `firstGenericJson` and predates the modern DTI response
-fields:
-
-```bash
-python3 tests/usbem_verify.py --source firstGenericJson --contract legacy
-```
-
-Legacy mode verifies the original event response envelope, event creation, alert creation,
-no-incident behavior without DTI, and `records` batching. It does not require the modern
-component `versions` block or DTI result fields. The default modern compatibility group also
-checks the old `dti_short_description` and `dti_work_note` aliases against the current listener.
-
-With no `--instance`, the verifier prompts for one of the four production instances. Set up its
-single config file once:
+The canonical laptop test is **one file**, `tests/test_ci_identifier_precedence.py`. Its
+historical filename is retained, but its default is now the complete declared Generic JSON V2
+API-and-BR manifest, not a CI-only check. It uses stock Python 3.9+ and imports no other project
+file. No Linux service, root account, scheduler, monitoring email, or required pip package is involved.
+The Python suite is version `1.2.0`, separate from runtime `2026.10.29.3`. Plan/report provenance
+includes the executing file's module-load SHA-256 as well as the suite version.
 
 ```bash
-cp tests/usbem_verify.env.example tests/usbem_verify.env
+cp tests/production_test.env.example production_test.env
+cp tests/production-fixtures.example.json target-fixtures.json
+python3 tests/test_ci_identifier_precedence.py --access-profile production --list-tests
+python3 tests/test_ci_identifier_precedence.py --access-profile production --plan
+python3 tests/test_ci_identifier_precedence.py --access-profile production --env-file production_test.env --fixture target-fixtures.json --report-file dti-report.json
 ```
 
-`tests/usbem_verify.env` contains all four instance URLs and OAuth credential slots, common CI and
-group fixtures, and per-instance caller/assignee values. The URLs are prefilled. Fill credentials
-for the instances you intend to test; each run uses only the selected instance's URL and OAuth
-pair. Add shared CIs, assignment groups, and other lookup fixtures once. For name mapping, fill the
-shared last name and the selected instance's first name; the verifier joins them. Caller sys_ids
-and each instance's `default_caller_sys_id` are separate values. Assignee fixtures are optional so
-the instance's on-call schedule can populate `assigned_to` when no assignee is sent. Blank fixture
-values make only the related checks report as skipped. The filled-in config is ignored by Git.
+Fill both private copies with this target's actual values before a live invocation. The catalog
+contains all 14 production advanced families, invalid placeholder IDs, and nine source-fact
+attestations defaulted to false. Because this identity cannot read CMDB/user/property tables,
+the responsible data owner supplies existing reference values and verifies those prerequisites;
+the script does not request more permissions or provision fixtures. Configuration and populated
+field-read preflight stop before the first Event if complete prerequisites are unavailable.
+This is one Python program; the env and JSON catalog are configuration, not additional testers.
 
-The OAuth application's user must have the production API permissions in use here:
-the limited profile submits events through the connector (`em_event` write), reads and updates
-Incident, and reads/creates/updates Alert. It defaults on for the four production profiles, skips cleanup, never invokes Scripts -
-Background, and retains tagged test records. It does not query `sys_user` or `sys_journal_field`:
-the `notes` group prints Incident/Alert numbers and prompts for manual confirmation in a terminal.
+### Production access profile
 
-For a custom target such as a PDI, pass its URL with `--instance` and use `--user` / `--password`
-or `--env-file` for credentials. The unified config file still supplies common fixture values.
-Caller and assignee fields accept sys_ids or exact full names. The verifier validates references
-through Incident readback without querying `sys_user`. Category and subcategory defaults and
-overrides are tested automatically.
+The 85-feature production manifest follows the actual connector → processed Event → Alert →
+Incident path, including fast no-wait creation, the seven required fields, CI precedence and
+Event/Alert/Incident CI binding, duplicates, wrappers/batches, errors, routing, severity/clear,
+notes, terminal replacements and ownership guards. It requires only the existing connector POST,
+Event read, Alert read/write and Incident read/write. A transport allowlist forbids all other
+table access, dot-walks, direct Event writes, creates/deletes, administrative setup and attachment
+downloads. Fresh ownership readback precedes every lifecycle/guard PATCH.
 
-To test the original connector response contract, point `--source` at that listener and select
-legacy mode. The old payload matrix still runs:
+Those rights prove observable functionality, not hidden administrative evidence. Note sentinels
+are checked in the formatted visible `work_notes` view of the exact owned Incident/Alert, after
+a fresh raw ownership read. Blank or missing formatted views are incomplete, including for
+negative assertions. This proves only presence/absence within that visible view, not complete
+raw journal history, exact global counts, or ACL-hidden entries. Debug companion Event metadata is not downloaded
+attachment proof; reference-source facts are owner-attested rather than independently queried.
+The non-Incident Task guard is excluded because its Task baseline cannot be read. The report names
+these boundaries; production completion is not the broader comprehensive-profile certification.
+Missing fixtures, required customer fields or field ACLs remain INCOMPLETE/nonzero.
+
+Use target-specific profiles one at a time: DEV, then IT, UAT and PROD after reviewing each report.
+Shared Basic usernames with per-profile passwords and existing per-profile OAuth credentials are
+supported; selected blank URLs fail before network and unselected blanks are ignored. Assignment
+is configured by `USBEM_ASSIGNMENT_GROUP` and its exact expected ID, without code edits.
+See [the full production usage and commands](docs/production-test-usage.md).
+
+The run creates real retained test Incidents/Alerts. Normal platform notifications, email,
+outage rules and other Business Rules can fire; the script does not suppress them. Choose an
+approved caller/group/CI and testing window. It installs no service, root process, scheduler or
+email notifier. Three parallel first events still exercise the accepted duplicate-Incident race.
+
+### Broader comprehensive profile
+
+The remaining configuration/admin guidance describes the default `comprehensive` profile.
+Use it only with its separately required reference, journal and attachment access. Its ordinary
+env template is `tests/ci_identifier_test.env.example`; explicit DEV fixture administration is
+not available in production mode. Historical failed/incomplete administrative evidence is retained.
+
+`--list-tests` and `--plan` inspect coverage without credentials or network writes. For a live
+run, configure the selected target's Basic credentials (plain or base64), OAuth client credentials,
+or an existing profile such as `--env-file tests/usbem_verify.env --profile itsmnowDEVworker`.
+The selected profile must have a non-empty `USBEM_<PROFILE>_URL`; a missing/blank selected URL
+stops before network access instead of falling back to a global PDI. An explicit `--instance`
+wins. Unselected blank profiles are ignored, so DEV can be configured before the other targets.
+Profile names that normalize to an empty key are rejected.
+Base64 is reversible encoding, not hashing or encryption. Keep filled configuration private.
+Generated outputs use atomic replacement and POSIX mode 0600 where supported. On Windows,
+store credentials, catalogs and reports in a user-only NTFS folder: POSIX mode bits and
+`mkstemp` cannot establish private Windows ACLs. This privacy requirement also applies to the
+administrative catalogs and recovery journals described below.
+TLS verification is enabled; `--ca-bundle` supplies corporate trust roots. Redirects and automatic
+POST retries are disabled.
+The GitHub repository is public. Filled fixtures and full JSON reports are not public-safe merely
+because they omit credentials: they contain target and record metadata. Keep detailed execution
+evidence in the selected PDI's Knowledge attachments; publish only a reviewed sanitized summary.
+
+The env template contains common CI/required-field settings. An ordinary run also needs a
+target-specific JSON reference catalog, passed with `--fixture` or the
+`USBEM_TEST_FIXTURES_JSON` JSON-object setting. This is configuration, not another test script.
+See [the comprehensive KB configuration](kb/generic_json_v2_dti_api_and_tests.md#comprehensive-profile-configuration-and-dev-setup)
+for its top-level fixture names and advanced-case schema. Missing fixtures or evidence access
+produce INCOMPLETE/nonzero, not a smaller green test disguised as full acceptance.
+Complete coverage requires a group input and exact expected sys_id. Advanced cases may be arrays:
+offering parent filtering requires positive/negative controls, and default-CI policy requires
+three distinct controls including a real configured non-empty default CI. No default configured
+means that family remains incomplete unless the separately authorized DEV provisioning/property
+mode is selected. Canonical inputs must be genuine name variants beyond
+letter case. User additional-info expectations preserve native JSON booleans, numbers, arrays,
+and objects; connector-added routing/DTI values follow their operational string contract.
+Expectations can also require absent keys. Root/envelope Event/SPECIAL aliases beat conflicting
+wrapped aliases, while wrapped real Incident passthrough fields overlay envelope Incident defaults.
+Set `duplicate_work_note_enabled` to the actual target property's JSON boolean value; the tester
+does not change it.
+Provide `default_category` and `default_subcategory` as independently verified stored runtime
+defaults, not the override choices from the env. The suite omits those payload fields to test
+defaulting and separately omits DTI short description to prove Event-description autofill.
+Do not infer `default_category` solely from a choice label. The DEV parity default is stored
+literally as `Software`, not its canonical PDI choice value `software`; `Monitoring Alert` is
+also a customer parity literal. The supplied required-field checks prove filled/stored values,
+not choice-taxonomy validity. Prefer explicit target stored choice values in production.
+The prior suite `1.0.0` corrected-fixture supplemental check passed both defaults cases in 44.619 seconds using
+the same final script, actual Event/Incident/Alert readback and a 30-second stable window.
+That separate result does not rewrite the exact-file full run's raw `fail`/exit 2 or constitute
+a clean full-suite pass. Its 75 pass / 1 fail / 9 skip / 1 known-limitation result remains intact.
+Advanced Incident-field families require `want_incident:true`; they cannot go green by disabling
+the very Incident whose fields must be inspected.
+Where local resolution requires it, `terminal_extra_fields` can contain only a non-empty string
+`u_cause`; the field must already exist and its stored value is checked after the owned update.
+
+### Explicit DEV fixture setup
+
+The same file adds privileged setup only when `--provision-dev-fixtures` is explicitly selected
+with `--confirm-fixture-target` matching the exact selected HTTPS PDI origin. Setup is restricted
+to hosts of the form `dev<digits>.service-now.com`, requires Basic-auth administrative access,
+and runs its embedded, allowlisted Global background setup. It is not part of an ordinary
+OAuth/restricted-account test run. `--plan` remains read-only and describes the conditional writes.
+No helper script, service, root process or claim table is installed.
+
+The setup creates only the five required custom `u_*` fields, marked test-owned reference data,
+and a target-bound catalog (POSIX mode 0600; user-only folder ACLs required on Windows). Common env CI/caller/group settings plus those fixtures
+are sufficient; no externally authored fixture JSON is needed for setup. The configured group
+must already have an active unique-name assignee member, and the existing default-caller property
+must be valid; setup does not alter that property or operational group membership.
+CI/service/offering ingestion goes through IRE. It does not adopt
+unrelated records, alter existing field types/references, create `em_alert.task`, or automatically
+grant missing privileges. Compatible existing schema is reused; mismatches stop setup. Persisted
+schema and test fixtures are retained and reported rather than silently removed.
+Normal platform processing can also populate owned CI asset/model references and create linked
+hardware assets after IRE ingestion. Follow-on records are retained and inventoried; the tester
+does not promise fixture versions remain immutable outside its bounded setup interval.
+
+Use `--prepare-fixtures-only` with setup to provision/read back without submitting Events;
+`--fixture-output` chooses the private generated catalog path. Marked fixtures are reused on
+reruns after exact ownership/drift checks. Preparation success is not a full test PASS.
 
 ```bash
-python3 tests/usbem_verify.py --source firstGenericJson --contract legacy --access-profile limited
+python3 tests/test_ci_identifier_precedence.py --provision-dev-fixtures --confirm-fixture-target https://dev123456.service-now.com --prepare-fixtures-only --fixture-output dti-reference-fixtures.json --report-file dti-setup-report.json
+python3 tests/test_ci_identifier_precedence.py --provision-dev-fixtures --confirm-fixture-target https://dev123456.service-now.com --allow-default-ci-property --fixture-output dti-reference-fixtures.json --fixture-recovery-file dti-default-ci-recovery.json --report-file dti-report.json
+python3 tests/test_ci_identifier_precedence.py --restore-fixture-default-ci dti-default-ci-recovery.json --confirm-fixture-target https://dev123456.service-now.com --report-file dti-recovery-report.json
 ```
 
-[tests/usbem_verify.py](tests/usbem_verify.py) is a single Python file with no required packages;
-the optional fixture sidecar and template are described above. It runs on stock Python 3.9+ and
-drives the live endpoint the way a sender does, tagging every record with a unique prefix. The
-standard profile attempts cleanup; the limited production profile retains records. Any failed check
-returns a non-zero exit code. Groups, selectable with `--only`:
+Replace the example origin with the exact selected DEV PDI. Recovery is a separate connection-only
+mode; do not combine it with provisioning flags. Use a fresh recovery-journal path per lease.
+Prefer an existing ignored private directory such as `.local-evidence/` for every generated
+catalog, journal and machine report; arbitrary filenames are not automatically ignored.
+An existing valid default CI is reused without property writes. If none exists, the default-CI
+family additionally requires `--allow-default-ci-property`. Only during its three non-DTI
+controls may setup temporarily set `x_usbna_usb_event.default_cmdb_ci_sys_id`. A journal
+(POSIX mode 0600; private Windows folder required) selected by `--fixture-recovery-file` preserves the original value or absence;
+guarded `finally` restoration must be read back in the database and property cache, and interrupted
+runs require recovery before continuing. A concurrent external
+change is not overwritten; restoration failure makes the result nonzero. This shared application
+property can affect unrelated unhinted events while set, so run this phase only in the approved
+DEV maintenance window. A prepared catalog alone cannot prove the missing-property positive route
+under a normal restricted-account run. Production runs use preexisting approved fixtures, never this setup mode.
 
-| Group | What it proves |
-|---|---|
-| `compat` | response envelope, plain events, alerts, `records` batches, no incident without DTI, and legacy `dti_short_description` / `dti_work_note` names on the modern listener |
-| `payload_contract` | legacy nested wrappers (`event`, `payload`, `data`, `record`, `alert`), bare arrays, `events` batches, camelCase aliases, and `additionalInfo` object / JSON-string forms, verified through alert readback |
-| `fast` | `direct_to_incident` returns an incident immediately, reuses it while open, resolves it with `Solved (Permanently)`, `Abandoned`, and `Testing DTI`, opens a new one, and the Business Rule links the alert afterward |
-| `fields` | default Software/Monitoring Alert category and subcategory, Hardware/Server and Software/Monitoring Alert pass-through, caller_id and assigned_to by configured sys_id or full name, impact/urgency, and other payload overrides |
-| `lookups` | configured CI name/sys_id and `ciType` + `ciIdentifier`, CI support-group fallback, named assignment group, service, offering, and optional CAR ID, verified through Incident/Alert readback |
-| `notes` | creates a DTI incident note and an alert note, then prints record numbers and exact manual checks; interactive runs collect y/n/skip, non-interactive runs report observations |
-| `edge` | message keys longer than `incident.correlation_id`, concurrent events for one key, and a batch where only one record asks for an incident |
-| `timing` | round-trip milliseconds for plain events and immediate DTI, reported as an observation |
+The provisioned suite's frozen hash, final flags, setup effects/restoration evidence and actual
+full result are recorded separately in
+[the new validation report](docs/validation-2026-10-29-provisioned-comprehensive.md); currently PENDING.
 
-`--keep` leaves the records in place for inspection, `--json out.json` writes the results, and
-`--prefix` sets the tag. Terminal-state checks use only Incident API update access; they report as
-skipped when the caller cannot change the incident state. No admin background-script access is
-used.
+### Comprehensive-profile coverage
 
-Production URLs and OAuth credentials come from the ignored `tests/usbem_verify.env`, using
-instance-specific keys such as `USBEM_ITSMNOWDEVWORKER_URL` and
-`USBEM_ITSMNOWDEVWORKER_OAUTH_CLIENT_SECRET`. Environment variables with the same names override
-the file. Custom-target credentials use `--user` / `--password` or a config file passed with
-`--env-file`.
+`--list-tests` is the authoritative feature list. The declared families include:
 
-**TLS.** Certificates are verified. The verifier uses macOS `/usr/bin/curl` when it is built
-with Apple SecureTransport, so venv runs trust the local macOS Keychain roots. On other systems
-it uses `requests` when installed or Python's verified TLS defaults. `--ca-bundle /path/root.pem`
-supplies an explicit corporate CA bundle; `--insecure` disables verification only as a last resort.
+- Fast DTI response/version/CI/correlation checks; exact seven required Incident fields and
+  assignment; Event processing completion; actual later Alert-to-Incident BR linkage; sequential reuse.
+- All five wrappers, additional information object/string forms, outer/envelope precedence,
+  `records`/`events`/bare-array and mixed batches, aliases/defaults/time/severity/resolution,
+  retained custom context, malformed-payload zero-side-effect probes, and long keys.
+- Fixture-driven caller/assignee/fallback, canonical/class-label/name/identifier/node/resource CI,
+  support-tier/group precedence, service inference, parent-filtered offerings, CAR ID,
+  customer Incident fields, and Salesforce PERU mappings.
+- Incident/Alert journal occurrence counts, new follow-up notes and no-note updates,
+  debug companion Event/attachment downloads, terminal states 6/7/8, and closed/foreign ownership guards.
+- Three concurrent first events, always exercised and explicitly reported with the accepted
+  duplicate race limitation. A complete result is not a guarantee against all interleavings.
 
-To check the instance against this checkout rather than only its self-reported version, run
-`python3 scripts/deploy_usbem.py --dry-run` — it prints any record whose script differs from the
-repo.
+Normal payloads omit legacy wait keys. The API must promptly return the intended Incident within
+the configured POST budget (default 10 seconds). Independent readback then requires processed Events,
+the correct Alert link and fields, and a continuous stable window. The supplied env template uses
+the vetted 30-second stable window, 240-second observation deadline, and 10-second POST budget.
+The raw CLI's 120-second timeout fallback is retained for compatibility, not certified here for
+the full serial-read manifest. Actual counts and duration come from the report; no old focused-suite
+event count or minimum duration applies to the new matrix.
 
-### Focused CI identifier regression test
+### Comprehensive-profile access, writes, and results
 
-For a post-deployment check from a work laptop, copy the standalone script and its template.
-Configure two distinct real CIs, a valid affected-end-user sys_id, and choices valid in that instance:
+The full identity needs connector POST; Event, Incident and Alert reads including states and
+references; `sys_journal_field` reads; and attachment metadata/file reads. Lifecycle/ownership
+checks PATCH only Incidents/Alerts created and tagged by this run, using allowlisted fields.
+In ordinary test mode, all records are retained and the tester never deletes records, invokes
+Scripts - Background, changes CMDB/schema/security configuration, or grants missing permissions.
+The explicit DEV setup mode has the narrowly documented schema/reference-data and temporary-property
+exceptions above; it still does not grant privileges or modify unrelated records.
+A live run creates dozens of retained Events/Alerts/Incidents and runs normal platform Business
+Rules and notifications; native workflow/mail is not suppressed. Review the test caller, group,
+target, and production identity first. No tester email notifier is configured, but native mail
+can still occur. Actual counts belong in the report, not an advance promise.
+Advanced fixture checks also read the required CMDB/group/service/offering records and the
+named default-CI property; the ambiguity control also reads exact-name users. Missing fixture
+or field access blocks the corresponding coverage. Closed historical Alerts may remain on their
+recorded terminal Incident, but a current non-Closed Alert must link to the replacement.
+The foreign-task guard needs a marked non-Incident test Task with a short
+description starting `[TEST] USBEM`, its `foreign_task_sys_id`, Task read access, and
+the actual Alert Task-reference field's read/write access. On DEV that supported internal field
+is `em_alert.incident`, a reference to `task`; `em_alert.task` is absent and must not be added.
+Ordinary mode never creates/writes the Task. Explicit setup can create the marked fixture;
+the actual guard only updates its owned Alert and requires the Task baseline to stay unchanged.
+No arbitrary real work task is accepted as this fixture.
 
-```bash
-cp tests/ci_identifier_test.env.example tests/ci_identifier_test.env
-python3 tests/test_ci_identifier_precedence.py --report-file ci-test-report.json
-```
+Any failed assertion fails the run. Missing/hidden fields, absent fixtures, unperformed checks,
+or denied required lifecycle updates block complete sign-off. Exit codes are `0` complete
+(including `complete_with_known_limitations`), `2` functional failure, `3` configuration/access/
+transport error, and `4` INCOMPLETE. A report with the accepted race stays explicitly
+`complete_with_known_limitations`; it is not an unqualified concurrency PASS.
+The prior suite `1.0.0` exact-file comprehensive CLI completed in **1749.514 seconds**, with **75 pass / 1 fail /
+9 skip / 1 known limitation**, zero errors and 93 cases. Its raw `fail`/exit 2 is retained:
+the failure was our incorrect default-category fixture, separately corrected and retested in
+two passing supplemental cases. Nine unavailable fixture/schema families still block complete
+coverage. Three concurrent submissions returned one distinct Incident in this run; that does
+not disprove the accepted race. See [the preserved prior report](docs/validation-2026-10-29-python-comprehensive.md).
+The new suite `1.1.0` provisioned-fixture full result is PENDING and must not be inferred from it.
+The earlier
+[714-second DEV runtime retest](docs/validation-2026-10-29.2.md) and its 204 local tests remain
+historical runtime evidence, not proof that this expanded one-file matrix passed.
 
-The standalone script uses stock Python 3.9+ and supports Basic credentials (plain or base64),
-OAuth client credentials, and a corporate CA bundle. Existing production OAuth settings can be
-selected with `--env-file tests/usbem_verify.env --profile itsmnowDEVworker` after adding the
-focused fixture keys from the supplied template. Keep filled env files private.
-
-All ten standard cases use fast DTI and omit the wait key. They require a valid incident sys_id promptly
-(default 10-second POST budget), then poll stored Incident and Event records separately. Normal
-operation creates the incident, stamps the message-key breadcrumb in `correlation_id`, returns,
-and lets the alert Business Rule link the later alert. The wait key remains legacy compatibility.
-
-Name-only and identifier-only controls prove the fixtures before conflicting-name tests run.
-The suite then tests explicit sys_id precedence, camelCase and snake_case inputs, sequential
-duplicates, and all five supported single-record wrappers (`event`, `payload`, `data`, `record`,
-`alert`) with Incident overrides inside the wrapper. Every observation verifies the exact CI,
-correlation ID, caller, category, subcategory, impact, urgency, short description, description,
-and configured assignment group. Each phase must remain correct for 30 seconds within its
-120-second deadline. A complete successful standard suite takes at least six minutes plus request time.
-Timeouts and observation intervals are configurable. No POST is automatically retried.
-
-The standard suite retains twelve tagged Events and expects ten Incidents when it passes. Exit codes are
-`0` pass, `2` functional failure, and `3` configuration/access/transport failure. It reads only
-`em_event` and `incident` and does not require CMDB, Scripts - Background, or deletion access.
-It does not directly inspect the alert or prove the BR link with this limited identity; alert-to-incident
-linking was verified separately in DEV. It does not prove production-specific rules or all
-concurrency interleavings.
-
-The API-and-BR design retains a known simultaneous-first-event race: three concurrent requests
-created two incidents in DEV. The owner accepted this limitation and explicitly declined a new
-claim table. The standard suite does not claim concurrency safety. Use `--include-concurrency`
-for an optional stress check, which fails if requests create different incidents. See
-[the extended live validation report](docs/validation-2026-10-29.md).
+Run one selected target at a time through DEV, IT, UAT, and PROD with its own fixtures and
+approved identity. DEV admin success does not certify a production OAuth identity or local rules.
+Legacy waiting, the locked standalone transform, ATF installers, and the optional inbound-email
+Flow Action are outside this default current-listener API-and-BR contract; do not claim them
+unless separately exercised. The older `tests/usbem_verify.py` remains a historical helper,
+not an additional script required for this comprehensive laptop test.
 
 ## Known gaps
 
@@ -641,9 +796,15 @@ for an optional stress check, which fails if requests create different incidents
   attachments are enabled, the target must explicitly approve `GlideSysAttachment.write / execute`
   for `x_usbna_usb_event`. DEV approval of its existing requested row is target-specific; do not
   export that row or replace it with broad attachment/table grants.
+- **Identifier access does not prove resource access.** The identifier path queries `cmdb_ci`
+  with `INSTANCEOF`; resource lookup can directly query the requested child class. Review that
+  target's child-table scoped read privilege separately. The current DEV comprehensive trial
+  exposed a `cmdb_ci_server / read` request; the owner approved that exact DEV request and its
+  `allowed` status was read back. No other grants changed; do not treat it as portable approval.
 - **No duplicate protection on the fast path.** Simultaneous events for one key can each open an
   incident. The extended 2026-10-29 DEV test reproduced two incidents for three simultaneous
-  first events. The focused laptop suite fails this outcome rather than marking it observational.
+  first events. The comprehensive laptop suite always exercises this case and explicitly reports
+  the owner-accepted race as a known limitation, not an unqualified concurrency PASS.
 
 Long message keys are stored and looked up as a length-bounded prefix plus a stable short hash
 of the full key; keys that fit are unchanged. This avoids the former raw-key/truncated-column
@@ -666,9 +827,9 @@ Tooling:
 - `scripts/deploy_usbem.py` — push the repo to an instance and read back its versions
 - `scripts/deploy_dti_kb.py` — publish/update the DTI API and test guide; requires an explicit
   `--expected-instance https://<target>.service-now.com` matching both configured connections
-- `tests/usbem_verify.py` — live end-to-end verification, one self-contained file
-- `tests/test_ci_identifier_precedence.py` — focused laptop regression check for identifier precedence
-- `tests/ci_identifier_test.env.example` — non-secret configuration template for that check
+- `tests/test_ci_identifier_precedence.py` — canonical comprehensive one-file laptop API-and-BR tester
+- `tests/ci_identifier_test.env.example` — non-secret configuration template for that tester
+- `tests/usbem_verify.py` — historical verifier/helper, not required by the comprehensive tester
 - `requirements.txt` — nothing required; `requests`/`certifi` only if TLS needs them
 
 Docs:

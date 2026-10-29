@@ -3,6 +3,184 @@
 Compact working state for the USBEM genericJsonV2 push connector. Detailed behaviour lives in
 `README.md` and `docs/`; this file is what a future session needs before touching the PDI.
 
+## Restricted production tester delivery (2026-10-29)
+
+- Owner now needs the full laptop test with only Event R, Alert RWC and Incident RWC, plus
+  the existing connector POST, and the complete program attached to the same DEV KB. No
+  service/email/scheduler/root requirement has returned. Production mode is an explicit flag
+  in the SAME standalone Python file, not another executable helper.
+- Suite 1.2.0 / article source 1.6.0; runtime .3 unchanged. Current frozen program SHA-256:
+  `68db4a360ae112c223e327bc5a51f1f5bc2e77703353b42a96dc2d3bf4f5d280`.
+  416 Python + 234 JS checks pass (650 total). The independent native-Alert model invokes
+  all 85 production callbacks: 84 pass and one accepted parallel-first-event limitation.
+  Model coverage is not actual production acceptance.
+- Transport is restricted before authentication to connector/OAuth and the three direct
+  tables. No reference/admin/journal/attachment/Task reads, dot-walks, Event writes, deletes,
+  fixture provisioning, schema/security/property change or admin fallback. Lifecycle PATCH
+  requires fresh current-run source and target provenance. The full catalog and populated
+  field probes must pass before any Event; unavailable evidence remains incomplete/nonzero.
+- Final long focused DEV validation completed on the frozen bytes, using the approved DEV
+  identity through this transport boundary, not the actual restricted production identity.
+  New final evidence includes mixed batches, parser native JSON/defaults and Salesforce,
+  plus CI/required fields/duplicates/severity/debug/notes/lifecycle/guards/concurrency.
+  Result: 20 checks / 33 cases / 725.494 seconds, 19 PASS and one accepted concurrency limitation,
+  zero fail/error/skip. Independent three-GET/zero-write audit confirms 45 Processed Events,
+  15 Incidents, 25 Alerts and 98 required-field checks with expected fields/links unchanged.
+  Complete 85-feature live production acceptance is NOT claimed.
+- Retain both earlier candidate failures unchanged: raw journal input was empty despite
+  real notes, and OK/severity-5 was wrongly assumed to suppress native Alerts. Exact-owned
+  formatted visible notes now prove only visible sentinel presence/absence, never raw history
+  or counts. OK creates a native Alert but no automatic DTI Incident; Clear/Closing controls
+  remain strict. Stored strings and native additional-info JSON have type-aware checks.
+- Production templates use target-owned existing fixtures with nine source-fact attestations;
+  never copy DEV IDs into corporate targets. The approved target order is one invocation at
+  a time: DEV, IT, UAT, PROD. Shared Basic user/per-profile passwords and OAuth are supported;
+  unselected blank URLs are ignored and an explicitly selected blank URL stops before network.
+  Assignment group is env-configured. Windows needs a user-only NTFS folder; 0600 is POSIX only.
+- Article 1.6.0 is published/active/latest on the matching DEV KB, with source/body and actual
+  authenticated reader attachment links verified. Script, templates, full catalog, usage and
+  failed/final/readback/preflight evidence have API/reader exact-byte proof; anonymous downloads
+  are unavailable. Only old script/template copies were replaced with recovery copies retained.
+  Historical reports remain. Sanitized source/summary publication is authorized for this scoped
+  milestone; detailed instance/record evidence is excluded from the public repository.
+  Keep detailed reports private; do not grant the requested business-app privilege or
+  change the absent default-CI property merely to force a green administrative retest.
+- No PDI backup was run or queued; backups remain manual-only. Unrelated preexisting
+  `tests/usbem_verify.env.example` changes must not be staged.
+
+## Historical provisioned one-file retest gate (2026-10-29)
+
+- Owner explicitly authorized creating the missing DEV fixtures/schema and including setup
+  in the same Python program. Suite 1.1.0 is frozen pending full acceptance; runtime .3 is unchanged.
+  Administrative fixture setup must be explicit, exact-PDI-confirmed and isolated from normal
+  test execution. No claim table, unsupported Alert task column or automatic security grants.
+- Use the native polymorphic em_alert.incident reference to Task for the non-Incident ownership
+  guard. Five exact customer u_* fields are needed; new CMDB fixtures must use IRE, and all
+  fixture data must have stable, verified test ownership. Do not mutate unrelated demo data.
+- The default-CI positive control needs only a brief DEV property lease around its three cases,
+  with a durable recovery journal, compare-before-restore, finally restoration and explicit
+  nonzero failure if the original value/absence cannot be verified.
+- Owner approved PUBLIC Git publication of sanitized source/templates/summary at the coherent
+  milestone. Full machine JSON and record-level evidence remain local/private and in the
+  matching DEV Knowledge article. No production instance is authorized for fixture setup here.
+- Confirmed DEV preparation created five logical Global customer fields, seven IRE-owned CIs,
+  three role-free locked-out/email-blank users, one group, one inactive base Task and one owned
+  service association. First admin response timed out without retry; live readback proved the
+  operation completed. A deliberate subsequent prepare-only CLI passed and independent before/
+  after snapshots proved the fixture records retained their IDs/fields/modification versions.
+  Inherited dictionary metadata is platform-generated, not an extra requested customer field.
+- The first focused provisioned preflight was raw FAIL: 17 pass / 2 fail in 435.111 seconds.
+  CAR ID exposed a specific business-application table read request (approval pending).
+  The foreign-Task note failure was a harness issue: the native populated Alert additional_info
+  write ACL silently ignores Table API updates, even for admin. Do not weaken that ACL.
+  Guard tests now use connector Event replay plus actual journal assertions, and the closed
+  guard proves its existing DTI metadata/blank-link trigger during its real state PATCH.
+  No API/BR semantic change was needed. Preserve the failed preflight as historical evidence.
+- Current frozen source is `a01958b88f3c1b9ff716ef6c78ca0ca868f69bc558057240c5df7e48fb46c04e`;
+  548 offline checks pass (314 Python, 234 JavaScript). Actual prepare-only CLI passes on these
+  bytes with zero new fields/Events. A tight before/prepare/after comparison confirms unchanged
+  captured fields, IDs, modification counts and timestamps on the 12 fixture data rows.
+- Actual same-file foreign-Incident, Closed-Alert and foreign-Task BR guards plus final integrity
+  all pass in 338.716 seconds. Foreign guards use isolated NON-DTI connector Alert-note replays;
+  ordinary DTI response assertions remain strict. Primary failures now remain visible when later
+  observations add secondary symptoms. Preserve both earlier failed guard preflights.
+- The temporary default-CI phase restored original absence. Real interrupted-process recovery
+  was separately verified on source68cb (same property implementation, before the guard-only
+  changes): own child SIGKILL after durable activation, actual connection-only recovery CLI,
+  restored absence, repeated recovery and stale-active-journal replay without further writes.
+- A broader interval comparison found three server-CI audit versions changed outside the
+  installer window. Audit/readback identifies asset/model links and three associated hardware
+  assets using a pre-existing model. The exact actor/job is unproven. Retain/inventory those
+  assets; do not claim fixture versions remain unchanged through all native platform processing.
+- Final readback confirms all six runtime sources/BR configuration still exact and default-CI
+  property absent. The specific DEV business-application read privilege is still Requested;
+  approval is the blocker. CAR-ID retest, clean full CLI, final KB attachments and sanitized Git
+  publication remain unperformed. Do not promote this progress to complete release sign-off.
+- The following section records the prior suite 1.0.0 result, not the pending provisioned run.
+
+## Prior one-file comprehensive tester (2026-10-29)
+
+- Owner requires ONE standalone Python tester, not a CI-only runner plus separate helper
+  programs. `tests/test_ci_identifier_precedence.py` retains its historical filename but its
+  default CLI is now the comprehensive API/DTI/BR manifest. Suite version 1.0.0 is independent
+  of runtime 2026.10.29.3; the plan/report include the file's initial-load SHA-256.
+- Current candidate: 86 feature checks, SHA-256
+  `39bda3b5ae4e0192c384a8d6df55679805b505fc998f6ab6bf7b9f3fae6ed369`.
+  Missing fixtures, hidden evidence, and unperformed checks cannot produce a passing sign-off;
+  explicit INCOMPLETE/exit4 is separate from the accepted concurrent-first-event limitation.
+  New integrations/tests omit legacy wait keys. No service, scheduler, monitoring email,
+  or claim table is part of this update.
+- Offline validation: 230 Python tests, 26 CI lookup, 39 listener shape, 74 wrapper,
+  and 66 new Salesforce checks pass: 435 total. Python syntax validation passes.
+  Twelve publisher regressions cover harmless raw UL/LI separator normalization while
+  preserving list content, code/paragraph whitespace and escaped examples.
+- The expanded actual Python trial exposed a genuine DEV scoped resource-lookup prerequisite:
+  owner approved only the specific connector-scope `cmdb_ci_server/read` request targeting
+  Global. Live readback confirms allowed. No other grant changed.
+  Identifier lookup uses the parent CMDB table; its success does not prove child resource access.
+- All six DEV runtime sources were reread against the .2 baseline before the approved fix;
+  they are now installed at .3. The BR configuration and Advanced condition remain unchanged
+  and match the installer exactly. The .3 installer dry-run reports all six up to date.
+- The approved resource lookup was retested through the real Python client. Readback proves
+  a Processed Event, its Incident, and its Alert all resolve the expected CI, with the Alert
+  linked to that exact Incident. All seven required fields and assignment are correct.
+- Confirmed existing Salesforce alias collision, now OWNER-APPROVED and fixed in DEV: a payload
+  with `case_number`, `subject`, and root `status:'Closed'` previously became resolution_state Closing but
+  severity3, not clear0. `status` is consumed as a generic resolution alias before the Salesforce
+  helper reads remaining additional_info; canonical `case_status:'Closed'` correctly yields0.
+  Both paths remain in the tester; do not lower the generic-status expectation to hide the bug.
+  Owner approved the narrow correction. .3 recovers case status only if missing from remaining
+  case-specific context: original additional_info next, then original Event input. Explicit
+  mapped severity/resolution and case-specific status precedence remain authoritative.
+  66 actual-Core regressions passed, including wrappers, object/string AI and non-SF controls.
+- Local tester/docs corrections preserve native user JSON types (booleans/numbers/arrays) and distinguish root
+  DTI SPECIAL aliases from wrapped real Incident-field precedence. Actual local Core/DTI
+  execution independently verifies these expectations, rather than only matching mocks.
+- Exploratory runs preceded the final candidate and include known harness expectation mistakes
+  as well as the real missing privilege/Salesforce findings. They are not release acceptance
+  evidence and must not be conflated with results for the current exact file.
+- .3 deployment changed only the six known metadata records' script fields: semantic Core
+  fix plus coordinated version stamps. Exact-ID/name/scope/source preconditions preceded all
+  writes. Independent GET-only readback confirms active .3 scripts, unchanged exact
+  BR configuration and the one allowed server-read grant. Runtime source hashes are over
+  normalized-LF UTF-8 text, matching Path.read_text()/deployer input, not raw mixed-EOL files.
+- Final exact-file stock-Python .3 CLI completed in 1749.514 seconds with exit2/raw FAIL:
+  75 pass, 1 fail, 9 skip, 1 known limitation, 0 errors; 93 reported cases.
+  Controls: 30s stability/240s phase timeout/10s POST budget. The sole failure is the
+  assistant-chosen lowercase default fixture described below; raw JSON is unchanged.
+  Three simultaneous first events returned one Incident in this trial, not proof of race safety.
+  Independent GET-only readback confirms all 119 primary + 3 debug Events Processed, all
+  72 Incidents and 84 Alerts retained, no extra expected-field/current-link discrepancy,
+  both Salesforce Closed controls severity0/Closing, and all six active sources/BR config exact.
+  Maximum POST was 2.347s; minimum passing stable-observation dwell was 94.224s.
+  An async missing-information question asks for existing DEV fixtures for the unavailable
+  customer-specific families; absent fixtures/schema must remain INCOMPLETE, never green.
+- The replacement exact-current Python/template are attached to DEV KB0010015; API and reader
+  downloads match their source bytes, anonymous downloads are unavailable, and exactly one of
+  each remains. Only the two known old copies were replaced, with local recovery copies retained.
+  Both completed full-run JSON reports and the defaults supplemental JSON are attached and
+  reader/API bytes verified. Article1.4.0 is published/active/latest with visible attachments;
+  source-content readback and the actual reader agree. ServiceNow removed nine nonsemantic
+  list-separator newlines; the narrowly tested publisher comparison allows only those structural
+  separators and preserves all text/code. The sanitized summary is also attached and API/reader
+  bytes verified, with anonymous access unavailable. Only public Git synchronization remains
+  held pending the owner's visibility/publication choice.
+  Historical reports remain intact; the following section describes the earlier focused assets.
+- A comparison full run returned 75 pass / 1 fail / 9 skip / 1 known limitation. The sole
+  assertion expected assistant-inferred canonical category software instead of the declared
+  literal Software default. Raw failure remains unchanged. A focused same-current-file retest
+  with the corrected stored-value fixture passed both default cases in 44.619 seconds.
+  This is not choice-taxonomy certification or a rewritten clean full-suite PASS. DEV's default
+  literals are not its installed choice taxonomy; production should supply valid stored choices.
+- GitHub visibility was independently checked and is PUBLIC, contrary to earlier private-repo
+  wording. Owner has been asked whether to publish sanitized source/summary or hold GitHub.
+  Full machine reports and new record-level metadata must not be committed publicly. Detailed
+  local resume breadcrumbs are in ignored `.local-evidence/CODEX_NOTES-2026-10-29-private.md`;
+  final record-level evidence belongs in the matching DEV Knowledge article only.
+- No production target or restricted/OAuth identity was exercised, and no PDI backup was run
+  or queued under the manual-only owner policy. Unrelated `tests/usbem_verify.env.example`
+  edits predate this update and must not be included in its commit.
+
 ## Documentation target correction (2026-10-29)
 
 - Owner explicitly requires implementation and all documentation/KB/attachments in the same

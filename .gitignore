@@ -10,3 +10,27 @@ tests/usbem_verify.fixtures.env
 tests/usbem_verify.env
 tests/ci_identifier_test.env
 tests/instances/*.env
+# Record-level validation output is private evidence, not public source.
+.local-evidence/
+# Default/generated catalogs, recovery journals, and documented machine-report filenames.
+# Custom output names must likewise remain in a private ignored evidence directory.
+dti-reference-fixtures.json
+dti-default-ci-recovery-*.json
+dti-default-ci-recovery.json
+.usbem-state-*
+dti-report.json
+dti-setup-report.json
+dti-recovery-report.json
+target-fixtures.json
+# Production operator configuration and record-level results are private.
+*.env
+production-fixtures.json
+production-report.json
+dev-fixtures.json
+it-fixtures.json
+uat-fixtures.json
+prod-fixtures.json
+dev-report.json
+it-report.json
+uat-report.json
+prod-report.json

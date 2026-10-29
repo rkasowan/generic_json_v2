@@ -2,6 +2,89 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## Python suite 1.2.0 / article 1.6.0 — restricted production functional test
+
+- add explicit `--access-profile production` in the same standalone Python program for existing
+  connector POST plus Event R, Alert RW and Incident RW; runtime `2026.10.29.3` is unchanged
+- enforce a three-table transport/runner boundary, direct-field reads, fresh current-run ownership
+  before allowlisted Alert/Incident PATCH, no admin fallback and no production fixture provisioning
+- validate the complete static catalog and populated required-field visibility before the first
+  Event; missing fixtures, field ACLs or declared customer fields remain incomplete/nonzero
+- exercise the 85-feature production-observable manifest with Event/Alert/Incident CI binding,
+  suppressed-Alert absence and duplicate-Alert assertions; retain the accepted first-event race
+- explicitly qualify sentinel presence/absence in the exact owned record's formatted visible notes
+  versus complete raw journal history/exact global counts, debug companion Events
+  versus attachment bytes, and owner-attested reference facts versus independent source reads;
+  exclude non-Incident Task proof under the stated rights
+- provide production env and full-shaped fixture-catalog templates, four staged profile commands,
+  configurable assignment group, shared Basic username/per-profile passwords and existing OAuth support
+- document retained real test tickets and native notification/email/outage-rule effects; no service,
+  root process, scheduler, notifier, schema/security/property changes or deletion is introduced
+- preserve the separate pending administrative provisioned full retest and historical raw failures;
+  article 1.5.0 was an unpublished draft, not a completed publication
+- complete exact-file focused DEV three-table testing: 20 checks / 33 cases in 725.494 seconds,
+  19 PASS / 1 accepted concurrency limitation, zero failures/errors/skips; max POST 1.137 seconds,
+  minimum case stability 34.813 seconds, eight formatted-note observations and three debug companions
+- independently read back retained effects using three GET-only queries/zero writes: 45 Events
+  all Processed (42 primary + three debug), 15 Incidents, 25 Alerts and 98 required-field checks;
+  expected fields/links unchanged; three simultaneous first requests reproduced the accepted race
+  with three Incidents, not concurrency safety
+- preserve scope limits: not full 85-feature live acceptance, an actual restricted production
+  account/corporate endpoint, or a clean administrative full-suite pass; scoped evidence is in
+  `validation-2026-10-29-production-access.md`
+- publish article 1.6.0 to matching DEV KB0010015; verify published/active/latest/attachment-display
+  flags, exact normalized body and actual reader download links; current test/configuration and evidence uploads match exact
+  bytes through authenticated API/reader downloads and anonymous requests do not return files
+- replace only the previous Python/common-env attachments with recovery copies retained; preserve
+  historical reports; article 1.4.0 is historical and 1.5.0 was never published; sanitized Git
+  publication is authorized but not yet claimed complete
+- pass 416 Python + 234 JavaScript checks (650 total), including 102 production unit methods;
+  the independent native-Alert model exercises all 85 actual callbacks with 84 PASS and one accepted
+  concurrency limitation, not actual production proof; 102 modeled cases, 119 connector calls,
+  11 negative probes, 24 formatted-note reads, three debug companions and five owned PATCH operations
+- use atomic output and POSIX 0600 mode where supported; require user-only NTFS folders for
+  private Windows credentials/catalogs/reports because POSIX mode bits do not set Windows ACLs
+
+## Python suite 1.1.0 / article 1.5.0 — provisioned-fixture retest PENDING
+
+- owner authorized explicit administrative DEV fixture/schema setup within the same canonical
+  Python file and reviewed sanitized public Git publication at coherent completion
+- retain runtime `2026.10.29.3`; no API/BR source change or claim table is part of this update
+- add an opt-in, exact-target-confirmed DEV setup path for five custom fields and marked owned
+  fixtures, with IRE CI/service/offering ingestion; ordinary Basic/OAuth tests remain non-provisioning
+- use the actual polymorphic Alert Task-reference field (`incident` on DEV), not a new `task` column
+- separate temporary default-CI property permission, private recovery journal and guarded original
+  value/absence restoration from the normal test path; no automatic security grants or unrelated writes
+- preserve the prior failed/incomplete raw report as history; new frozen-file setup/readback,
+  restoration, full-suite outcome and publication evidence remain PENDING, not claimed PASS
+
+## 2026.10.29.3 - 2026-10-29 — qualified coverage; DEV Knowledge published
+
+- owner approved a narrow Salesforce case-status recovery correction after generic Event alias
+  promotion; preserve explicit case-specific values and mapped severity/resolution precedence
+- replace the focused laptop check with one complete declared API-and-BR tester under the
+  existing `test_ci_identifier_precedence.py` filename; suite version remains 1.0.0 and article 1.4.0
+- verify native user additional-info JSON types separately from connector-added operational
+  strings, and root Event/SPECIAL alias priority separately from per-record Incident passthrough
+- validate actual stored Event/Incident/Alert/journal/attachment evidence, lifecycle and ownership
+  guards; missing fixtures/schema/permissions remain incomplete, not an unqualified pass
+- always exercise concurrent first events and explicitly retain the owner-accepted race limitation
+- approve only DEV's exact requested `cmdb_ci_server / read` privilege and read back `allowed`;
+  identifier parent-table access does not imply the resource-path child-table privilege
+- preserve the `.2` historical reports/source evidence; `.3` is deployed in DEV with all six
+  source strings matched and BR configuration retained; 435 offline checks pass
+- retain the exact-file full run's raw `fail`/exit 2: 75 pass / 1 fail / 9 skip / 1 known
+  limitation, zero errors, 93 cases and 1749.514 seconds. The sole failed assertion used our
+  incorrect default-category fixture; same-file corrected-fixture supplemental defaults passed
+  both cases separately. Unavailable-feature gaps still block a clean full-suite PASS
+- independently read back 122 retained Events (all Processed), 72 Incidents and 84 Alerts;
+  the final concurrency trial returned one Incident for three submissions without removing
+  the accepted race limitation. At that historical milestone DEV article 1.4.0 and detailed evidence were published and
+  reader-verified; authenticated attachment downloads matched exact bytes and anonymous downloads
+  are unavailable. Public Git publication was held pending approval at that milestone
+- allow only safe ASCII whitespace differences between HTML list tags in Knowledge publisher
+  verification, preserving content comparison; add twelve focused publisher regression checks
+
 ## 2026.10.29.2 - 2026-10-29
 
 - preserve Incident-field overrides inside all five supported single-record wrappers (`event`,

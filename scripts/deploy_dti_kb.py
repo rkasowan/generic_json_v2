@@ -119,6 +119,21 @@ def markdown_to_html(source: str) -> str:
     return "\n".join(output)
 
 
+def normalized_knowledge_html(value: str) -> str:
+    """Ignore only ASCII separators at raw UL/LI boundaries, never code/text."""
+    separators = re.compile(r"(?<=<ul>)[ \t\r\n]+(?=<li>)|(?<=</li>)[ \t\r\n]+(?=<li>|</ul>)")
+    protected = re.compile(r"<(?P<tag>pre|code)\b[^>]*>.*?</(?P=tag)[ \t\r\n]*>", re.IGNORECASE | re.DOTALL)
+    parts = []
+    cursor = 0
+    for match in protected.finditer(value):
+        parts.append(separators.sub("", value[cursor:match.start()]))
+        parts.append(match.group())
+        cursor = match.end()
+    parts.append(separators.sub("", value[cursor:]))
+    # Decode only after matching raw tags: escaped code examples are not structure.
+    return html.unescape("".join(parts))
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-instance", required=True, type=instance_origin,
@@ -168,7 +183,7 @@ def main(argv: list[str] | None = None) -> None:
             str(rows[0].get("latest")).lower() != "true" or rows[0].get("short_description") != TITLE):
         raise RuntimeError("Knowledge article did not read back with the expected title, active, latest, "
                            "published and visible-attachments state")
-    if html.unescape(rows[0].get("text", "")) != html.unescape(body):
+    if normalized_knowledge_html(rows[0].get("text", "")) != normalized_knowledge_html(body):
         raise RuntimeError("Knowledge article body does not match the source")
     rows[0].pop("text", None)
     print(json.dumps(rows[0], sort_keys=True))

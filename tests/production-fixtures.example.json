@@ -1,0 +1,132 @@
+{
+  "caller_name": "REPLACE_WITH_UNIQUE_TEST_CALLER_NAME",
+  "assignee_sys_id": "REPLACE_WITH_TEST_ASSIGNEE_SYS_ID",
+  "assignee_name": "REPLACE_WITH_UNIQUE_ACTIVE_GROUP_MEMBER_NAME",
+  "group_name": "REPLACE_WITH_BASELINE_TEST_GROUP_NAME",
+  "default_caller_sys_id": "REPLACE_WITH_CONFIGURED_DEFAULT_CALLER_SYS_ID",
+  "ci_support_sys_id": "REPLACE_WITH_PRIMARY_SUPPORT_CI_SYS_ID",
+  "ci_support_group_sys_id": "REPLACE_WITH_CI_SUPPORT_GROUP_SYS_ID_DIFFERENT_FROM_BASELINE_GROUP",
+  "service_sys_id": "REPLACE_WITH_PARENT_SERVICE_A_SYS_ID",
+  "service_name": "REPLACE_WITH_PARENT_SERVICE_A_NAME",
+  "offering_sys_id": "REPLACE_WITH_OFFERING_UNDER_SERVICE_A_SYS_ID",
+  "offering_name": "REPLACE_WITH_OFFERING_UNDER_SERVICE_A_NAME",
+  "default_ci_sys_id": "REPLACE_WITH_ALREADY_CONFIGURED_DEFAULT_CI_SYS_ID",
+  "default_category": "REPLACE_WITH_ACTUAL_STORED_CONNECTOR_DEFAULT_CATEGORY",
+  "default_subcategory": "REPLACE_WITH_ACTUAL_STORED_CONNECTOR_DEFAULT_SUBCATEGORY",
+  "duplicate_work_note_enabled": true,
+  "terminal_close_code": "REPLACE_WITH_VALID_TARGET_CLOSE_CODE_STORED_VALUE",
+  "terminal_extra_fields": {},
+  "alert_closed_state": "Closed",
+  "correlation_length": 100,
+  "severity_map": {
+    "1": ["2", "2"],
+    "2": ["2", "2"],
+    "3": ["3", "3"],
+    "4": ["4", "4"]
+  },
+  "production_attestations": {
+    "canonical_ci_name": false,
+    "canonical_group_name": false,
+    "l2_support_group": false,
+    "car_id": false,
+    "service_inference": false,
+    "offering_parent_filter": false,
+    "default_dummy_policy": false,
+    "ambiguous_user_rejection": false,
+    "ci_support_group": false
+  },
+  "advanced_cases": {
+    "node_fallback": {
+      "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier"],
+      "payload": {"node": "REPLACE_WITH_IDENTIFIER_CI_EXACT_NAME", "resource": ""},
+      "expected_incident": {"cmdb_ci": "REPLACE_WITH_IDENTIFIER_SELECTED_CI_SYS_ID"}
+    },
+    "resource_resolution": {
+      "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier"],
+      "payload": {"node": "", "resource": "REPLACE_WITH_IDENTIFIER_CI_EXACT_NAME", "ci_type": "REPLACE_WITH_CI_TECHNICAL_CLASS"},
+      "expected_incident": {"cmdb_ci": "REPLACE_WITH_IDENTIFIER_SELECTED_CI_SYS_ID"}
+    },
+    "additional_info_name_fallback": {
+      "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier"],
+      "payload": {"node": "", "resource": "", "additional_info": {"name": "REPLACE_WITH_IDENTIFIER_CI_EXACT_NAME"}},
+      "expected_incident": {"cmdb_ci": "REPLACE_WITH_IDENTIFIER_SELECTED_CI_SYS_ID"},
+      "absent_additional_info": ["name"]
+    },
+    "ci_class_label": {
+      "payload": {"ci_type": "REPLACE_WITH_HUMAN_CLASS_LABEL_NOT_TECHNICAL_CLASS"},
+      "expected_incident": {"cmdb_ci": "REPLACE_WITH_IDENTIFIER_SELECTED_CI_SYS_ID"}
+    },
+    "canonical_ci_name": {
+      "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier"],
+      "payload": {"cmdb_ci": "REPLACE_WITH_NONEXACT_CANONICAL_CI_NAME_VARIANT"},
+      "expected_incident": {"cmdb_ci": "REPLACE_WITH_CANONICAL_CI_SYS_ID"}
+    },
+    "canonical_group_name": {
+      "payload": {"assignment_group": "REPLACE_WITH_NONEXACT_CANONICAL_GROUP_NAME_VARIANT"},
+      "expected_incident": {"assignment_group": "REPLACE_WITH_CANONICAL_GROUP_SYS_ID"}
+    },
+    "invalid_group_ci_fallback": {
+      "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier"],
+      "payload": {"assignment_group": "USBEM-PRODUCTION-TEST-INTENTIONALLY-NONEXISTENT-GROUP", "cmdb_ci": "REPLACE_WITH_PRIMARY_SUPPORT_CI_SYS_ID"},
+      "expected_incident": {"cmdb_ci": "REPLACE_WITH_PRIMARY_SUPPORT_CI_SYS_ID", "assignment_group": "REPLACE_WITH_CI_SUPPORT_GROUP_SYS_ID_DIFFERENT_FROM_BASELINE_GROUP"}
+    },
+    "l2_support_group": {
+      "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier", "assignment_group"],
+      "payload": {"cmdb_ci": "REPLACE_WITH_CI_WITH_BLANK_PRIMARY_AND_VALID_L2_GROUP_SYS_ID"},
+      "expected_incident": {"cmdb_ci": "REPLACE_WITH_CI_WITH_BLANK_PRIMARY_AND_VALID_L2_GROUP_SYS_ID", "assignment_group": "REPLACE_WITH_L2_SUPPORT_GROUP_SYS_ID"}
+    },
+    "car_id": {
+      "payload": {"usbem_car_id": "REPLACE_WITH_EXISTING_CAR_ID_VALUE"},
+      "expected_incident": {},
+      "expected_additional_info": {"cmdb_ci_business_app": "REPLACE_WITH_CAR_BUSINESS_APPLICATION_SYS_ID"}
+    },
+    "service_inference": {
+      "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier", "service", "business_service", "usbem_service", "usbemService", "usbem_offering", "usbemOffering", "service_offering", "serviceOffering"],
+      "payload": {"cmdb_ci": "REPLACE_WITH_CI_ASSOCIATED_TO_SERVICE_A_SYS_ID"},
+      "expected_incident": {"cmdb_ci": "REPLACE_WITH_CI_ASSOCIATED_TO_SERVICE_A_SYS_ID", "business_service": "REPLACE_WITH_PARENT_SERVICE_A_SYS_ID"}
+    },
+    "offering_parent_filter": [
+      {
+        "remove_fields": ["service", "business_service", "usbem_service", "usbemService", "usbem_offering", "usbemOffering", "service_offering", "serviceOffering"],
+        "payload": {"usbem_service": "REPLACE_WITH_PARENT_SERVICE_A_NAME", "usbem_offering": "REPLACE_WITH_OFFERING_UNDER_SERVICE_A_NAME"},
+        "expected_incident": {"business_service": "REPLACE_WITH_PARENT_SERVICE_A_SYS_ID", "service_offering": "REPLACE_WITH_OFFERING_UNDER_SERVICE_A_SYS_ID"}
+      },
+      {
+        "remove_fields": ["service", "business_service", "usbem_service", "usbemService", "usbem_offering", "usbemOffering", "service_offering", "serviceOffering"],
+        "payload": {"usbem_service": "REPLACE_WITH_DIFFERENT_SERVICE_B_NAME", "usbem_offering": "REPLACE_WITH_OFFERING_UNDER_SERVICE_A_NAME"},
+        "expected_incident": {"business_service": "REPLACE_WITH_DIFFERENT_SERVICE_B_SYS_ID", "service_offering": ""}
+      }
+    ],
+    "custom_incident_fields": {
+      "payload": {"u_replace_with_existing_test_field": "USBEM production acceptance sentinel"},
+      "expected_incident": {"u_replace_with_existing_test_field": "USBEM production acceptance sentinel"}
+    },
+    "default_dummy_policy": [
+      {
+        "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier", "direct_to_incident", "directToIncident"],
+        "payload": {"node": "USBEM-PRODUCTION-TEST-INTENTIONALLY-NONEXISTENT-NODE", "resource": ""},
+        "expected_incident": {},
+        "expected_event": {"cmdb_ci": "REPLACE_WITH_ALREADY_CONFIGURED_DEFAULT_CI_SYS_ID"},
+        "want_incident": false
+      },
+      {
+        "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier", "direct_to_incident", "directToIncident"],
+        "payload": {"node": "USBEM-PRODUCTION-TEST-INTENTIONALLY-NONEXISTENT-NODE", "resource": "", "cmdb_ci": "USBEM-PRODUCTION-TEST-INTENTIONALLY-NONEXISTENT-CI"},
+        "expected_incident": {},
+        "expected_event": {"cmdb_ci": ""},
+        "want_incident": false
+      },
+      {
+        "remove_fields": ["cmdb_ci", "cmdbCi", "ci_type", "ciType", "ci_identifier", "ciIdentifier", "direct_to_incident", "directToIncident"],
+        "payload": {"node": "", "resource": ""},
+        "expected_incident": {},
+        "expected_event": {"cmdb_ci": ""},
+        "want_incident": false
+      }
+    ],
+    "ambiguous_user_rejection": {
+      "payload": {"assigned_to": "REPLACE_WITH_EXACT_FULL_NAME_OF_AT_LEAST_TWO_USERS"},
+      "expected_incident": {"assigned_to": ""}
+    }
+  }
+}

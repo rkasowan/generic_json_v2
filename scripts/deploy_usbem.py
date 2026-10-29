@@ -34,8 +34,8 @@ import urllib.request
 from http.cookiejar import CookieJar
 from pathlib import Path
 
-VERSION = "2026.10.29.2"
-EXPECTED_RELEASE = "2026.10.29.2"
+VERSION = "2026.10.29.3"
+EXPECTED_RELEASE = "2026.10.29.3"
 
 MARK = "@@JSON@@"
 INSTANCE_KEYS = ("servicenow_instance", "SN_INSTANCE_URL", "SN_INSTANCE", "instance")

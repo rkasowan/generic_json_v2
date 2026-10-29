@@ -463,6 +463,56 @@ class TransportConfigTests(unittest.TestCase):
             self.assertEqual(instance, "https://dev.service-now.com")
             self.assertEqual(auth["mode"], "oauth")
 
+    def test_selected_blank_or_missing_profile_url_never_falls_back_to_global_urls(self):
+        for selected in ({}, {"USBEM_PROD_URL": ""}, {"USBEM_PROD_URL": "   "}):
+            with self.subTest(selected=selected), patch.dict(os.environ, {}, clear=True):
+                values = dict(self.config(), USBEM_URL="https://unrelated-global.service-now.com", **selected)
+                with self.assertRaisesRegex(ValueError, "USBEM_PROD_URL"):
+                    runner.configuration(self.args(profile="PROD"), values)
+
+    def test_selected_normalized_profile_url_wins_with_unchanged_global_fixture_and_auth_fallback(self):
+        values = dict(self.config(), USBEM_DEVIT_URL="https://file-target.service-now.com",
+                      USBEM_URL="https://unrelated-global.service-now.com")
+        with patch.dict(os.environ, {"USBEM_DEVIT_URL": "https://process-target.service-now.com"}, clear=True):
+            instance, auth, settings = runner.configuration(self.args(profile="DEV/IT"), values)
+        self.assertEqual(instance, "https://process-target.service-now.com")
+        self.assertEqual(auth["mode"], "basic")
+        self.assertEqual(auth["password"], " test ")
+        self.assertEqual(settings.ci_type, "cmdb_ci_server")
+        self.assertEqual(settings.expected_id, EXPECTED)
+        with patch.dict(os.environ, {}, clear=True):
+            instance, _, _ = runner.configuration(self.args(profile="DEV/IT"), values)
+        self.assertEqual(instance, "https://file-target.service-now.com")
+
+    def test_blank_process_profile_url_disables_even_a_configured_file_profile_url(self):
+        values = dict(self.config(), USBEM_PROD_URL="https://file-target.service-now.com")
+        with patch.dict(os.environ, {"USBEM_PROD_URL": ""}, clear=True):
+            with self.assertRaisesRegex(ValueError, "USBEM_PROD_URL"):
+                runner.configuration(self.args(profile="PROD"), values)
+
+    def test_explicit_instance_wins_over_valid_named_profile_blank_missing_or_other_url(self):
+        for selected in ({}, {"USBEM_PROD_URL": ""}, {"USBEM_PROD_URL": "https://other-target.service-now.com"}):
+            with self.subTest(selected=selected), patch.dict(os.environ, {"USBEM_PROD_URL": ""}, clear=True):
+                instance, _, _ = runner.configuration(self.args(profile="PROD", instance="https://explicit-target.service-now.com"),
+                                                       dict(self.config(), **selected))
+                self.assertEqual(instance, "https://explicit-target.service-now.com")
+
+    def test_nonempty_profile_with_empty_alphanumeric_slug_is_rejected(self):
+        for profile in ("---", "   ", "é", "///"):
+            for instance in ("", "https://explicit-target.service-now.com"):
+                with self.subTest(profile=profile, instance=instance), patch.dict(os.environ, {}, clear=True):
+                    with self.assertRaisesRegex(ValueError, "ASCII letter or digit"):
+                        runner.configuration(self.args(profile=profile, instance=instance), self.config())
+
+    def test_unselected_empty_profiles_do_not_disable_the_explicitly_selected_or_default_target(self):
+        values = dict(self.config(), USBEM_IT_URL="", USBEM_UAT_URL="", USBEM_PROD_URL="",
+                      USBEM_DEV_URL="https://selected-dev.service-now.com")
+        with patch.dict(os.environ, {}, clear=True):
+            instance, _, _ = runner.configuration(self.args(profile="DEV"), values)
+            self.assertEqual(instance, "https://selected-dev.service-now.com")
+            default_instance, _, _ = runner.configuration(self.args(), values)
+            self.assertEqual(default_instance, self.config()["SN_INSTANCE_URL"])
+
     def test_concurrency_opt_in_can_be_selected_by_flag_or_env(self):
         with patch.dict(os.environ, {}, clear=True):
             _, _, settings = runner.configuration(self.args(), self.config())

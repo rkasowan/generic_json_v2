@@ -4,6 +4,7 @@
 import argparse
 from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
+import html
 import io
 import json
 from pathlib import Path
@@ -187,6 +188,91 @@ class TargetGuardTests(unittest.TestCase):
                 client.request.assert_not_called()
                 admin.run_background_script.assert_called_once()
                 self.assertEqual(client.query.call_count, 3)
+
+
+class KnowledgeBodyComparisonTests(unittest.TestCase):
+    def test_only_raw_list_structural_ascii_whitespace_is_ignored(self):
+        source = "<ul>\n<li>First &amp; exact</li>\r\n\t<li>Second</li> \t\r\n</ul>"
+        stored = "<ul><li>First &amp; exact</li><li>Second</li></ul>"
+        self.assertEqual(publisher.normalized_knowledge_html(source), publisher.normalized_knowledge_html(stored))
+        self.assertEqual(publisher.normalized_knowledge_html(source), "<ul><li>First & exact</li><li>Second</li></ul>")
+
+    def test_lost_changed_or_reordered_list_text_is_not_ignored(self):
+        source = "<ul>\n<li>Alpha</li>\n<li>Beta</li>\n</ul>"
+        for stored in ("<ul><li>Alpha</li></ul>", "<ul><li>Alpha</li><li>BETA</li></ul>",
+                       "<ul><li>Beta</li><li>Alpha</li></ul>"):
+            with self.subTest(stored=stored):
+                self.assertNotEqual(publisher.normalized_knowledge_html(source), publisher.normalized_knowledge_html(stored))
+
+    def test_list_item_text_whitespace_including_empty_item_is_preserved(self):
+        for source, changed in (("<ul><li>Two  spaces</li></ul>", "<ul><li>Two spaces</li></ul>"),
+                                ("<ul><li>Line one\nline two</li></ul>", "<ul><li>Line oneline two</li></ul>"),
+                                ("<ul><li> \n </li></ul>", "<ul><li></li></ul>")):
+            with self.subTest(source=source):
+                self.assertEqual(publisher.normalized_knowledge_html(source), source)
+                self.assertNotEqual(publisher.normalized_knowledge_html(source), publisher.normalized_knowledge_html(changed))
+
+    def test_non_ascii_spacing_at_list_boundaries_is_not_removed(self):
+        for separator in ("\u00a0", "&nbsp;", "\u2003", "\v", "\f"):
+            with self.subTest(separator=separator):
+                source = "<ul>" + separator + "<li>Alpha</li></ul>"
+                self.assertEqual(publisher.normalized_knowledge_html(source), html.unescape(source))
+                self.assertNotEqual(publisher.normalized_knowledge_html(source), "<ul><li>Alpha</li></ul>")
+
+    def test_paragraph_text_and_between_paragraph_whitespace_remain_exact(self):
+        for source in ("<p>Line one\n  line two</p>", "<p>One</p>\n<p>Two</p>", "<p> One </p>"):
+            with self.subTest(source=source):
+                self.assertEqual(publisher.normalized_knowledge_html(source), source)
+                self.assertNotEqual(publisher.normalized_knowledge_html(source), publisher.normalized_knowledge_html(source.replace("\n", "").replace(" ", "")))
+
+    def test_actual_code_block_and_inline_code_whitespace_remain_exact(self):
+        for source in ("<pre><code>if ready:\n    work()\n</code></pre>",
+                       "<p>Before <code>x  +\n y</code> after</p>",
+                       "<pre><code><ul>\n<li>raw code sample</li>\n</ul></code></pre>"):
+            with self.subTest(source=source):
+                self.assertEqual(publisher.normalized_knowledge_html(source), source)
+                self.assertNotEqual(publisher.normalized_knowledge_html(source), publisher.normalized_knowledge_html(source.replace("\n", "")))
+
+    def test_escaped_list_tags_in_pre_are_decoded_but_never_normalized_as_tags(self):
+        source = "<pre><code>&lt;ul&gt;\n&lt;li&gt;Alpha&lt;/li&gt;\n&lt;li&gt;Beta&lt;/li&gt;\n&lt;/ul&gt;</code></pre>"
+        expected = "<pre><code><ul>\n<li>Alpha</li>\n<li>Beta</li>\n</ul></code></pre>"
+        self.assertEqual(publisher.normalized_knowledge_html(source), expected)
+        self.assertNotEqual(publisher.normalized_knowledge_html(source), expected.replace("\n", ""))
+
+    def test_escaped_list_tags_outside_pre_are_not_normalized_after_unescape(self):
+        source = "<p>Literal &lt;ul&gt;\n&lt;li&gt;sample&lt;/li&gt;\n&lt;/ul&gt;</p>"
+        self.assertEqual(publisher.normalized_knowledge_html(source), html.unescape(source))
+
+    def test_unrelated_html_tag_boundaries_are_not_normalized(self):
+        source = "<div>\n<p>Alpha</p>\n</div>\n<section>\n<span>Beta</span>\n</section>"
+        self.assertEqual(publisher.normalized_knowledge_html(source), source)
+
+    def run_existing_article_readback(self, transform):
+        source = Mock()
+        source.read_text.return_value = "# List test\n- Alpha\n- Beta\n\n```\n    exact code\n```"
+        body = publisher.markdown_to_html(source.read_text.return_value)
+        article = {"sys_id":"a"*32, "number":"KBTESTHTML", "short_description":publisher.TITLE,
+                   "workflow_state":"published", "active":"true", "latest":"true", "display_attachments":"true",
+                   "text":transform(body)}
+        client, admin = Mock(base=EXPECTED), Mock(instance=EXPECTED)
+        client.query.side_effect = [[{"sys_id":"b"*32,"title":"IT"}], [{"sys_id":article["sys_id"]}], [article]]
+        with patch.object(publisher,"Client",return_value=client), patch.object(publisher,"ServiceNow",return_value=admin), \
+                patch.object(publisher,"SOURCE",source), redirect_stdout(io.StringIO()):
+            publisher.main(["--expected-instance",EXPECTED])
+        return client, admin
+
+    def test_publisher_accepts_sanitizer_list_separator_changes_only(self):
+        client, admin = self.run_existing_article_readback(lambda body: body.replace("<ul>\n<li>","<ul><li>").replace("</li>\n<li>","</li><li>").replace("</li>\n</ul>","</li></ul>"))
+        client.request.assert_not_called()
+        admin.run_background_script.assert_called_once()
+
+    def test_publisher_still_rejects_changed_list_content(self):
+        with self.assertRaisesRegex(RuntimeError,"body does not match"):
+            self.run_existing_article_readback(lambda body: body.replace("Alpha","Changed"))
+
+    def test_publisher_still_rejects_code_whitespace_loss(self):
+        with self.assertRaisesRegex(RuntimeError,"body does not match"):
+            self.run_existing_article_readback(lambda body: body.replace("    exact code","exact code"))
 
 
 if __name__ == "__main__":

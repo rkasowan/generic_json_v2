@@ -18,7 +18,7 @@ USBEM_Core.prototype = {
 
         // Release stamp. Every USBEM script carries one and the listener reports all of
         // them, so a stale copy on an instance shows up in the response body.
-        this.VERSION = '2026.10.29.2';
+        this.VERSION = '2026.10.29.3';
         this.COMPONENT = 'USBEM_Core';
         this.DEFAULT_SOURCE = 'GenericJSON';
         this.DEFAULT_DESCRIPTION = 'Generic JSON event';
@@ -902,6 +902,7 @@ USBEM_Core.prototype = {
         var caseNumber;
         var caseSubject;
         var caseStatus;
+        var originalStatusInfo;
         var createdDate;
         var impactedCount;
         var primaryOffering;
@@ -914,6 +915,18 @@ USBEM_Core.prototype = {
         caseNumber = this.findFirstValueByCanonicalKeys(payload, ['case_number', 'case number', 'casenumber', 'external_case_id', 'salesforce_case_id', 'sf_case_number']);
         caseSubject = this.findFirstValueByCanonicalKeys(payload, ['case_subject', 'case subject', 'casesubject', 'subject', 'salesforce_case_subject', 'sf_case_subject']);
         caseStatus = this.findFirstValueByCanonicalKeys(payload, ['case_status', 'case status', 'casestatus', 'status', 'salesforce_case_status', 'sf_case_status']);
+        // The generic Event normalizer consumes "status" as resolution_state before
+        // Salesforce inference runs. Recover a consumed alias only when the remaining
+        // case-specific context did not already supply a status. Preserve that context's
+        // precedence, then original additional_info, then the original Event input.
+        if (!this.hasValue(caseStatus)) {
+            originalStatusInfo = {};
+            this.mergeAdditionalInfo(originalStatusInfo, ctx.raw_additional_info);
+            caseStatus = this.findFirstValueByCanonicalKeys(originalStatusInfo, ['case_status', 'case status', 'casestatus', 'status', 'salesforce_case_status', 'sf_case_status']);
+        }
+        if (!this.hasValue(caseStatus)) {
+            caseStatus = this.findFirstValueByCanonicalKeys(ctx.working, ['case_status', 'case status', 'casestatus', 'status', 'salesforce_case_status', 'sf_case_status']);
+        }
         createdDate = this.findFirstValueByCanonicalKeys(payload, ['case_created_date', 'case created_date', 'created_date', 'case_opened_date']);
         impactedCount = this.findFirstValueByCanonicalKeys(payload, ['number_of_customers_impacted', 'number of customers impacted', 'customers_impacted', 'customer_count']);
         primaryOffering = this.findFirstValueByCanonicalKeys(payload, ['primary_offering', 'primary offering', 'primary_service_offering', 'service_offering_primary']);
