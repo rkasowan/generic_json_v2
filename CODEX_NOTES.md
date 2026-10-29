@@ -5,6 +5,14 @@ Compact working state for the USBEM genericJsonV2 push connector. Detailed behav
 
 ## Release 2026.10.29.1 (2026-10-29)
 
+- Comprehensive follow-up gate is HOLD, not a clean pass. See
+  `docs/validation-2026-10-29-comprehensive.md`: 744-second captured actual-HTTP matrix,
+  72 tagged processed Events, seven wrapped-payload cases lose category/subcategory overrides;
+  unique follow-up alert work note remains unjournaled after an open Incident is linked;
+  debug has zero attachments because `GlideSysAttachment.write/execute` is still requested;
+  non-object JSON records create junk Events. Assignee rejection was isolated to the existing
+  group-membership abort BR and valid-member cases pass. Runtime/source/privileges were not
+  changed during testing; approval to correct the newly found issues was requested.
 - CI resolution precedence is explicit sys_id, then `ci_type` + `ci_identifier`, then textual
   `cmdb_ci`; a display/name value can no longer bypass a valid class-scoped identifier.
 - `tests/test_ci_identifier_precedence.py` is the standalone post-deployment laptop test. It uses

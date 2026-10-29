@@ -1,6 +1,10 @@
 # Generic JSON V2 Direct To Incident API, Business Rule, and Python Testing
 
-Article version: 1.2.0. Connector runtime release: 2026.10.29.1.
+Article version: 1.2.1. Connector runtime release: 2026.10.29.1.
+
+## Current release gate — HOLD
+
+Comprehensive follow-up testing on dev392825 did not produce a clean release pass. Flat-payload DTI, exact CI selection, required fields, sequential reuse, terminal cycles, and long-key separation passed, but supported wrapped payloads lost Incident field overrides. A new Alert work note sent after an Incident was linked was not journaled. Debug captures had no attachments because the enforcing scope's `GlideSysAttachment.write` privilege is still requested. Non-object JSON records were also accepted as junk Events. See the attached `validation-2026-10-29-comprehensive.md` for the 744-second live matrix, exact evidence, fixture-policy explanation, and remaining acceptance limits. No runtime correction or permission change was made by that testing. Do not treat the focused Python suite's PASS as clearance of these broader failures.
 
 ## Purpose and scope
 

@@ -3,6 +3,11 @@
 Repo version: `2026.10.29.1`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
+Release gate: **HOLD** after the [comprehensive DEV validation](docs/validation-2026-10-29-comprehensive.md).
+Flat DTI checks pass, but wrapped Incident overrides and follow-up Alert notes fail; debug
+attachments also lack an approved DEV scope privilege. These are separate from the accepted
+simultaneous-first-event race. No runtime fix was applied by that test run.
+
 Every script in this project carries that version, and the endpoint reports all of them in every
 response under `versions`, so you can tell what an instance is actually running without opening a
 single record:
