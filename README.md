@@ -583,13 +583,15 @@ decoy and returns exit code 2. The filled env file is ignored by Git.
 
 - **The scope needs its cross-scope privileges.** `x_usbna_usb_event` runs with
   `runtime_access_tracking = enforcing`, so it needs `incident` read+create+**write**, `sys_user`
-  read for exact full-name caller/assignee resolution, and `cmdb_rel_ci` read. Without the incident
+  read for exact full-name caller/assignee resolution, `cmdb_rel_ci` and `svc_ci_assoc` read, and
+  the requested `GlideRecord.setValue` / `GlideRecord.update` execute privileges. Without the incident
   write, annotating an incident that already exists (the
   duplicate work note) and writing `u_generating_alert` after creation are skipped and reported
   rather than done. Without `cmdb_rel_ci` read, any event resolving to a real CI throws
   `ScopeAccessNotGrantedException` before the support-group logic runs. Both are granted on
-  dev382837 as of 2026-09-28; the rows usually already exist on `sys_scope_privilege` with status
-  `requested`, so this is a status change, not a new record.
+  dev382837 as of 2026-09-28. The complete clean-install set was validated on dev392825 on
+  2026-10-29; the rows usually already exist on `sys_scope_privilege` with status `requested`, so
+  this is a status change, not a new record.
 - **No duplicate protection on the fast path.** Simultaneous events for one key can each open an
   incident. This predates the terminal-incident work.
 - **Message keys longer than `incident.correlation_id`** (100 characters out of box) can only be

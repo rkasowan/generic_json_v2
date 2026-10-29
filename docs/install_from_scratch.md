@@ -167,8 +167,14 @@ that none of them costs an event:
 |---|---|---|
 | `incident` | read, create, **write** | without write: the duplicate work note on a reused incident, and `u_generating_alert` written after creation. Both report a skip on the response rather than failing the event |
 | `cmdb_rel_ci` | read | without it, any event resolving to a real CI throws `ScopeAccessNotGrantedException` before the assignment-group logic runs, so CI-derived groups never take effect |
-| `cmdb_ci`, `cmdb_ci_service`, `service_offering`, `sys_user_group` | read | CI, service, offering and group resolution |
+| `cmdb_ci`, `cmdb_ci_service`, `service_offering`, `svc_ci_assoc`, `sys_user_group` | read | CI, service, offering and group resolution |
+| `life_cycle_stage_status` | read | lifecycle display values used while ranking duplicate CI candidates |
 | `sys_user` | read | exact full-name resolution for `caller_id` and `assigned_to`, including duplicate detection. The production connector scope already has this access; the API verifier does not query this table |
+
+On an enforcing clean install, also allow the requested scriptable privileges
+`GlideRecord.setValue / execute` and `GlideRecord.update / execute`. These are required while the
+scoped runtime populates the Event and performs the post-create Incident update. This exact clean
+install set was exercised on dev392825 on 2026-10-29.
 
 Grant them in **System Applications > Application Cross-Scope Access**. ServiceNow usually creates
 the row on `sys_scope_privilege` the first time a call is denied, with status `requested`, so the

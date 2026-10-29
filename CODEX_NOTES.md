@@ -9,6 +9,13 @@ Compact working state for the USBEM genericJsonV2 push connector. Detailed behav
   `cmdb_ci`; a display/name value can no longer bypass a valid class-scoped identifier.
 - `tests/test_ci_identifier_precedence.py` is the standalone post-deployment laptop test. It uses
   an ignored env file and a deliberately different existing CI name to prove identifier precedence.
+- dev392825 clean install: scope `96abfcbb97774b105fb3ba6de053afa6`; live conflicting-name DTI
+  test created `INC0010004` and resolved CI `Car-1` (`6cabe993c611222500bb025775ec8732`)
+  from `cmdb_ci_server` + serial `478933-e78-8823`, ignoring decoy name `*ANNIE-IBM`. All five
+  endpoint components reported `2026.10.29.1`.
+- the clean enforcing scope additionally required `svc_ci_assoc/read`,
+  `life_cycle_stage_status/read`, and the requested scriptable privileges
+  `GlideRecord.setValue/execute` and `GlideRecord.update/execute`.
 
 ## Live objects (dev382837)
 

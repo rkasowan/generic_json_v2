@@ -8,6 +8,8 @@ All notable project updates should be recorded here when work is completed and p
   `ci_type` + `ci_identifier`, with textual `cmdb_ci` used only as a fallback
 - added a standalone work-laptop regression test that deliberately supplies a different valid CI
   name and passes only when the identifier-selected CI reaches the DTI incident
+- installed the release into a clean enforcing scope on dev392825 and documented the additional
+  `svc_ci_assoc`, lifecycle, and scoped GlideRecord privileges exposed by the live DTI test
 
 ## 2026.09.30.1 - 2026-09-30
 
