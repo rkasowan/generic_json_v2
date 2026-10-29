@@ -565,19 +565,41 @@ repo.
 
 ### Focused CI identifier regression test
 
-For a small post-deployment check from a work laptop, copy the standalone script and its template,
-then configure one identifier-selected CI and a different existing CI name:
+For a post-deployment check from a work laptop, copy the standalone script and its template.
+Configure two distinct real CIs, a valid affected-end-user sys_id, and choices valid in that instance:
 
 ```bash
 cp tests/ci_identifier_test.env.example tests/ci_identifier_test.env
-python3 tests/test_ci_identifier_precedence.py
+python3 tests/test_ci_identifier_precedence.py --report-file ci-test-report.json
 ```
 
-The script needs only stock Python 3.9+, the connector URL, Basic API credentials (plain or
-base64-encoded), the CI class, a unique identifier JSON object, the expected CI sys_id, and a
-decoy CI name. It creates and retains one tagged DTI incident. The check passes only when the
-incident's `cmdb_ci` equals the identifier-selected sys_id; a name-first regression selects the
-decoy and returns exit code 2. The filled env file is ignored by Git.
+The standalone script uses stock Python 3.9+ and supports Basic credentials (plain or base64),
+OAuth client credentials, and a corporate CA bundle. Existing production OAuth settings can be
+selected with `--env-file tests/usbem_verify.env --profile itsmnowDEVworker` after adding the
+focused fixture keys from the supplied template. Keep filled env files private.
+
+All six cases use fast DTI and omit the wait key. They require a valid incident sys_id promptly
+(default 10-second POST budget), then poll stored Incident and Event records separately. Normal
+operation creates the incident, stamps the message-key breadcrumb in `correlation_id`, returns,
+and lets the alert Business Rule link the later alert. The wait key remains legacy compatibility.
+
+Name-only and identifier-only controls prove the fixtures before conflicting-name tests run.
+The suite then tests explicit sys_id precedence, camelCase and snake_case inputs, sequential
+duplicates, and three simultaneous first events. Every observation verifies the exact CI,
+correlation ID, caller, category, subcategory, impact, urgency, short description, description,
+and configured assignment group. Each phase must remain correct for 30 seconds within its
+120-second deadline. A complete successful suite takes at least four minutes plus request time.
+Timeouts and observation intervals are configurable. No POST is automatically retried.
+
+The suite retains ten tagged events and expects six incidents when it passes. Exit codes are
+`0` pass, `2` functional failure, and `3` configuration/access/transport failure. It reads only
+`em_event` and `incident` and does not require CMDB, Scripts - Background, or deletion access.
+It does not prove production-specific rules, all concurrency interleavings, or email delivery.
+
+The current release has a reproduced concurrent-first-event defect: three simultaneous requests
+created two incidents in DEV. The new suite treats this as failure. See
+[the extended live validation report](docs/validation-2026-10-29.md); hold production promotion
+until the concurrency correction is validated.
 
 ## Known gaps
 
@@ -593,7 +615,8 @@ decoy and returns exit code 2. The filled env file is ignored by Git.
   2026-10-29; the rows usually already exist on `sys_scope_privilege` with status `requested`, so
   this is a status change, not a new record.
 - **No duplicate protection on the fast path.** Simultaneous events for one key can each open an
-  incident. This predates the terminal-incident work.
+  incident. The extended 2026-10-29 DEV test reproduced two incidents for three simultaneous
+  first events. The focused laptop suite fails this outcome rather than marking it observational.
 - **Message keys longer than `incident.correlation_id`** (100 characters out of box) can only be
   matched through the alert link, because the correlation lookup queries the full key. An event
   that arrives while the alert is briefly unlinked opens another incident.

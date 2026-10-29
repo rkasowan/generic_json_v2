@@ -10,6 +10,10 @@ All notable project updates should be recorded here when work is completed and p
   name and passes only when the identifier-selected CI reaches the DTI incident
 - installed the release into a clean enforcing scope on dev392825 and documented the additional
   `svc_ci_assoc`, lifecycle, and scoped GlideRecord privileges exposed by the live DTI test
+- hardened the laptop test with fast-only requests, fixture controls, prompt response budgets,
+  stable persisted-field observation, OAuth/Basic support, and required Incident field checks
+- real inbound HTTP validation over 263.786 seconds reproduced the known concurrent-first-event
+  defect: three requests created two incidents; this remains a production promotion gate
 
 ## 2026.09.30.1 - 2026-09-30
 

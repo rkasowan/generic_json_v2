@@ -59,6 +59,41 @@ On a failed assertion, the synthetic posts a new DTI failure event using `DTI_FA
 
 Monitor the systemd unit's exit status. Alert on one failure after accounting for planned ServiceNow maintenance; escalate repeated failures to the Event Management connector owner with the emitted `run_id`, `message_key`, failed checks, HTTP status if present, and relevant ServiceNow transaction logs. Do not include the password in tickets or logs.
 
+## Laptop regression test and current validation gate
+
+The attachments `test_ci_identifier_precedence.py` and `ci_identifier_test.env.example` are the
+current standalone laptop suite. Download both, copy the template to `ci_identifier_test.env`,
+and configure the target instance, credentials, two distinct CI fixtures, affected-end-user
+sys_id, valid category/subcategory choices, impact, urgency, and optional assignment group.
+
+```bash
+python3 test_ci_identifier_precedence.py --report-file ci-test-report.json
+```
+
+The normal contract is fast DTI: create an Incident, stamp the message key in `correlation_id`,
+return its sys_id promptly, then let the alert Business Rule link the alert after it arrives.
+The laptop suite omits all wait keys. The wait key is retained only for legacy callers.
+
+The test checks six cases: name and identifier fixture controls, explicit CI sys_id precedence,
+camelCase and snake_case conflicting-name inputs, sequential duplicate reuse, and three
+simultaneous first events. Every stored Incident must have the expected CI, caller, category,
+subcategory, urgency, impact, short description, description, and correlation breadcrumb.
+Configured assignment groups are verified by sys_id. The script uses connector POST and read
+access to `em_event` and `incident`; it retains all records and does not require deletion access.
+
+Allow at least four minutes for a complete passing run: each of eight phases requires 30 stable
+seconds, separately from the prompt POST response. Timeouts and observation windows are
+configurable. Basic/base64 and OAuth credentials and corporate CA bundles are supported.
+An incomplete or failed check cannot return PASS. Exit codes are 0 pass, 2 functional failure,
+and 3 configuration/access/transport error. It does not test email delivery.
+
+Current gate: extended actual HTTP testing on dev392825 took 263.786 seconds and confirmed the CI
+precedence fix, but three concurrent first fast-DTI events created two Incidents (`INC0010012`
+and `INC0010013`). Sequential duplicates reused one Incident. The strengthened laptop test
+fails this race. Hold production promotion until a concurrency correction is validated.
+The attached `validation-2026-10-29.md` records the live method, results, retained evidence, and
+limits. Production-specific identities, rules, choices, and field access still need target testing.
+
 ## Security and rollback
 
 Each template unit runs as root, as required, with systemd hardening and reads its matching root-only `/etc/generic-json-v2-dti-synthetic/<index>.env` file. Use a least-privilege ServiceNow integration identity and rotate its password through the approved secret process.

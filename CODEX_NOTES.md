@@ -9,6 +9,9 @@ Compact working state for the USBEM genericJsonV2 push connector. Detailed behav
   `cmdb_ci`; a display/name value can no longer bypass a valid class-scoped identifier.
 - `tests/test_ci_identifier_precedence.py` is the standalone post-deployment laptop test. It uses
   an ignored env file and a deliberately different existing CI name to prove identifier precedence.
+- Published synthetic article `KB0010025` on dev382837 (`3c617cbc9353c7d0c8ebf85bdd03d643`)
+  has `test_ci_identifier_precedence.py` and `ci_identifier_test.env.example` attached as of
+  2026-10-29; both downloaded copies were verified byte-for-byte against the repository source.
 - dev392825 clean install: scope `96abfcbb97774b105fb3ba6de053afa6`; live conflicting-name DTI
   test created `INC0010004` and resolved CI `Car-1` (`6cabe993c611222500bb025775ec8732`)
   from `cmdb_ci_server` + serial `478933-e78-8823`, ignoring decoy name `*ANNIE-IBM`. All five
@@ -16,6 +19,14 @@ Compact working state for the USBEM genericJsonV2 push connector. Detailed behav
 - the clean enforcing scope additionally required `svc_ci_assoc/read`,
   `life_cycle_stage_status/read`, and the requested scriptable privileges
   `GlideRecord.setValue/execute` and `GlideRecord.update/execute`.
+- Extended actual HTTP evidence is in `docs/validation-2026-10-29.md`: 263.786 seconds,
+  nine cases passed, concurrent-three-fast failed with `INC0010012` + `INC0010013` for one key.
+  Runtime source readback matched all six files exactly. Do not call the release concurrency-safe.
+- The new flow is fast DTI only; the wait key is legacy compatibility. The laptop suite now
+  omits it, verifies a prompt incident response, and observes CI plus all seven required fields.
+- dev392825 default caller property now points to the active Event Management user
+  `9d5de9e5930022005bc5f179077ffb07`. Explicit/default caller fast checks created
+  `INC0010014` / `INC0010015` with valid local software/os/2/2 choices and the Hardware group.
 
 ## Live objects (dev382837)
 
