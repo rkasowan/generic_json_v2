@@ -128,7 +128,7 @@ The stored source of all six runtime records matched the local release files byt
 ## Limits
 
 This DEV run used the signed-in browser identity, not the customer's production OAuth identity.
-It did not test email delivery, production ACLs, production-specific Incident Business Rules,
+It did not test production ACLs, production-specific Incident Business Rules,
 terminal-incident lifecycle, or sustained load. Invalid or ambiguous identifier fallback remains
 the existing documented policy; the CI fix does not redefine that policy. Passing observations
 over a bounded window cannot guarantee that no unrelated process will change the records later.

@@ -15,6 +15,9 @@ All notable project updates should be recorded here when work is completed and p
 - real inbound HTTP validation over 263.786 seconds reproduced the known concurrent-first-event
   defect: three requests created two incidents; the owner accepted this residual API-and-BR
   limitation without a new table, and concurrency stress remains an explicit optional test
+- retired the withdrawn Linux service deliverable and its installer/units; the active package and
+  Knowledge now cover only the DTI API, alert reconcile BR, and standalone Python test, with no
+  runtime version change
 
 ## 2026.09.30.1 - 2026-09-30
 

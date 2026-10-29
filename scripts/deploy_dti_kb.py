@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently publish the Generic JSON V2 DTI synthetic article to the PDI."""
+"""Idempotently publish the Generic JSON V2 DTI API and test article to the PDI."""
 
 from __future__ import annotations
 
@@ -16,8 +16,10 @@ from deploy_jabberwocky_flow_action import ServiceNow
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "generic_json_v2" / "kb" / "generic_json_v2_dti_linux_synthetic.md"
-TITLE = "Generic JSON V2 Direct To Incident Linux Synthetic"
+SOURCE = ROOT / "generic_json_v2" / "kb" / "generic_json_v2_dti_api_and_tests.md"
+TITLE = "Generic JSON V2 Direct To Incident API, Business Rule, and Python Testing"
+# Stable migration lookup: update the existing article and retain its number/attachments.
+LEGACY_TITLE = "Generic JSON V2 Direct To Incident Linux Synthetic"
 
 
 def load_env() -> None:
@@ -83,11 +85,16 @@ def markdown_to_html(source: str) -> str:
 
 def main() -> None:
     client = Client()
+    admin = ServiceNow()
+    if admin.instance != client.base:
+        raise RuntimeError("Table API and publishing session target different instances")
     bases = client.query("kb_knowledge_base", "active=true^ORDERBYtitle", "sys_id,title", 10)
     if not bases:
         raise RuntimeError("No active Knowledge base found")
     preferred = next((row for row in bases if row.get("title") == "IT"), bases[0])
     existing = client.query("kb_knowledge", "short_description=" + TITLE + "^latest=true", "sys_id", 1)
+    if not existing:
+        existing = client.query("kb_knowledge", "short_description=" + LEGACY_TITLE + "^latest=true", "sys_id", 1)
     payload = {
         "short_description": TITLE,
         "kb_knowledge_base": preferred["sys_id"],
@@ -102,19 +109,24 @@ def main() -> None:
     else:
         sys_id = client.request("POST", "/api/now/table/kb_knowledge", payload)["sys_id"]
     body = payload["text"]
-    ServiceNow().run_background_script(
+    admin.run_background_script(
         "var k=new GlideRecord('kb_knowledge');"
-        + "if(!k.get(" + json.dumps(sys_id) + "))throw 'DTI synthetic KB missing';"
+        + "if(!k.get(" + json.dumps(sys_id) + "))throw 'DTI KB missing';"
         + "k.setWorkflow(false);k.setValue('short_description'," + json.dumps(TITLE) + ");"
         + "k.setValue('text'," + json.dumps(body) + ");"
         + "k.setValue('kb_knowledge_base'," + json.dumps(preferred["sys_id"]) + ");"
         + "k.setValue('valid_to','2099-12-31');k.setValue('workflow_state','published');"
-        + "k.setValue('active','true');k.update();gs.print('DTI_SYNTHETIC_KB_PUBLISHED');",
+        + "k.setValue('active','true');k.update();gs.print('DTI_KB_PUBLISHED');",
         "global",
     )
-    rows = client.query("kb_knowledge", "sys_id=" + sys_id, "sys_id,number,short_description,workflow_state,active,latest", 1)
-    if not rows or rows[0].get("workflow_state") != "published" or str(rows[0].get("active")).lower() != "true":
-        raise RuntimeError("Knowledge article did not read back as active and published")
+    rows = client.query("kb_knowledge", "sys_id=" + sys_id, "sys_id,number,short_description,workflow_state,active,latest,text", 1)
+    if (not rows or rows[0].get("workflow_state") != "published" or
+            str(rows[0].get("active")).lower() != "true" or
+            str(rows[0].get("latest")).lower() != "true" or rows[0].get("short_description") != TITLE):
+        raise RuntimeError("Knowledge article did not read back with the expected title, active, latest and published state")
+    if html.unescape(rows[0].get("text", "")) != html.unescape(body):
+        raise RuntimeError("Knowledge article body does not match the source")
+    rows[0].pop("text", None)
     print(json.dumps(rows[0], sort_keys=True))
 
 

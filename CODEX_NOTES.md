@@ -9,7 +9,8 @@ Compact working state for the USBEM genericJsonV2 push connector. Detailed behav
   `cmdb_ci`; a display/name value can no longer bypass a valid class-scoped identifier.
 - `tests/test_ci_identifier_precedence.py` is the standalone post-deployment laptop test. It uses
   an ignored env file and a deliberately different existing CI name to prove identifier precedence.
-- Published synthetic article `KB0010025` on dev382837 (`3c617cbc9353c7d0c8ebf85bdd03d643`)
+- DTI API/BR/test Knowledge article `KB0010025` on dev382837 (`3c617cbc9353c7d0c8ebf85bdd03d643`),
+  sourced from `kb/generic_json_v2_dti_api_and_tests.md`,
   has `test_ci_identifier_precedence.py` and `ci_identifier_test.env.example` attached as of
   2026-10-29; both downloaded copies were verified byte-for-byte against the repository source.
 - dev392825 clean install: scope `96abfcbb97774b105fb3ba6de053afa6`; live conflicting-name DTI
@@ -30,6 +31,17 @@ Compact working state for the USBEM genericJsonV2 push connector. Detailed behav
 - Owner explicitly declined a claim table and accepted the simultaneous-first-event race.
   Keep fast API creation + correlation breadcrumb + alert BR linking. The five-case standard
   laptop suite covers sequential duplicates; `--include-concurrency` is an optional stress test.
+- Owner withdrew the Linux service requirement. Current delivery is the DTI API, alert reconcile
+  BR, and on-demand Python test only; retired service/installer/unit assets were removed from
+  the active package. No root service, scheduler, or monitoring email setup is required.
+- The focused laptop test reads only `em_event` and `incident`; it does not directly verify
+  alert linking. The BR's correct alert-to-incident link was verified separately in DEV, as
+  recorded in `docs/validation-2026-10-29.md`.
+- Scope cleanup readback: KB0010025 retains its identity, is active/latest/published under
+  `Generic JSON V2 Direct To Incident API, Business Rule, and Python Testing`, article 1.2.0.
+  Its body matches the new source, and the Python script, env template, and validation-report
+  attachments download byte-for-byte. Local validation: 31 Python + 26 JavaScript checks pass.
+  No runtime scripts changed and no new live test events were submitted during this cleanup.
 
 ## Live objects (dev382837)
 

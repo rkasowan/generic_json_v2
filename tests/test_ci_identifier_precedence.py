@@ -8,7 +8,7 @@ Control failures stop earlier. All payloads omit wait-for-incident keys. --inclu
 adds a three-request first-event stress case (ten total events, six expected incidents).
 Simultaneous first events can create duplicate incidents; this accepted limitation is reported
 even when the default suite passes. No POST is retried. This bounded suite does not prove
-concurrent safety, email delivery, or every production rule and incident lifecycle transition.
+concurrent safety, alert-to-incident linkage, or every production rule and incident lifecycle transition.
 """
 
 from __future__ import annotations
@@ -497,7 +497,7 @@ class Runner:
                 "phase_timeout_seconds": settings.timeout, "stable_seconds": settings.stable_seconds,
                 "fast_post_max_seconds": settings.fast_post_max_seconds,
                 "records_retained": True, "post_retries": 0,
-                "scope": "Fast DTI CI precedence, incident fields and sequential duplicates, using records visible to the test identity; not legacy wait mode, email delivery or complete incident lifecycle",
+                "scope": "Fast DTI CI precedence, incident fields and sequential duplicates, using records visible to the test identity; not legacy wait mode, alert linkage or complete incident lifecycle",
                 "concurrency_included": settings.include_concurrency,
                 "accepted_residual_limitation": "Simultaneous first events for the same message key can create duplicate incidents. A default pass does not assert concurrent safety.",
                 "concurrency_note": ("The optional race case fails on divergent incidents; one passing race does not prove every interleaving."

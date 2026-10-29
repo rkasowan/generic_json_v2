@@ -30,7 +30,10 @@ The repo also includes ATF assets for environment testing:
 - `atf/install_usbem_atf.js`
 - `docs/atf_testing.md`
 
-The Linux systemd synthetic under `synthetic/` runs every five minutes, validates DTI duplicate handling through live `em_event` and `incident` readback, removes the successful probe incident, emits an OK event, and creates a separately assigned DTI incident plus SMTP email only on failure. Installation and operations are documented in `kb/generic_json_v2_dti_linux_synthetic.md`.
+The DTI deliverable is the connector API, its correlation-based alert reconcile Business Rule,
+and the standalone Python regression test in `tests/test_ci_identifier_precedence.py`.
+The test runs on demand from a work laptop; no Linux service, root account, scheduler, or
+monitoring email setup is required. See [the DTI API and test guide](kb/generic_json_v2_dti_api_and_tests.md).
 
 ## Installing
 
@@ -504,8 +507,6 @@ shared last name and the selected instance's first name; the verifier joins them
 and each instance's `default_caller_sys_id` are separate values. Assignee fixtures are optional so
 the instance's on-call schedule can populate `assigned_to` when no assignee is sent. Blank fixture
 values make only the related checks report as skipped. The filled-in config is ignored by Git.
-The `synthetic/generic-json-v2-dti-synthetic.env.example` file is for the separate synthetic load
-tool and is not needed by this verifier.
 
 The OAuth application's user must have the production API permissions in use here:
 the limited profile submits events through the connector (`em_event` write), reads and updates
@@ -594,7 +595,9 @@ Timeouts and observation intervals are configurable. No POST is automatically re
 The standard suite retains seven tagged events and expects five incidents when it passes. Exit codes are
 `0` pass, `2` functional failure, and `3` configuration/access/transport failure. It reads only
 `em_event` and `incident` and does not require CMDB, Scripts - Background, or deletion access.
-It does not prove production-specific rules, all concurrency interleavings, or email delivery.
+It does not directly inspect the alert or prove the BR link with this limited identity; alert-to-incident
+linking was verified separately in DEV. It does not prove production-specific rules or all
+concurrency interleavings.
 
 The API-and-BR design retains a known simultaneous-first-event race: three concurrent requests
 created two incidents in DEV. The owner accepted this limitation and explicitly declined a new
@@ -636,6 +639,7 @@ Runtime:
 Tooling:
 
 - `scripts/deploy_usbem.py` — push the repo to an instance and read back its versions
+- `scripts/deploy_dti_kb.py` — publish/update the DTI API and test guide
 - `tests/usbem_verify.py` — live end-to-end verification, one self-contained file
 - `tests/test_ci_identifier_precedence.py` — focused laptop regression check for identifier precedence
 - `tests/ci_identifier_test.env.example` — non-secret configuration template for that check
@@ -645,5 +649,6 @@ Docs:
 
 - `docs/install_from_scratch.md`, `docs/install_and_behavior.md`, `docs/dti_transfer_package.md`,
   `docs/atf_testing.md`, `docs/production-transfer-inventory.md`
+- `kb/generic_json_v2_dti_api_and_tests.md` — DTI API, alert reconcile BR, and laptop test guide
 - `atf/install_usbem_atf.js`
 - `examples/` — sample payloads for each supported shape
