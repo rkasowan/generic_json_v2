@@ -14,7 +14,7 @@ var USBEM_Lookups = Class.create();
 USBEM_Lookups.prototype = {
     initialize: function (core) {
         this.core = core;
-        this.VERSION = '2026.10.29.1';
+        this.VERSION = '2026.10.29.2';
         this.COMPONENT = 'USBEM_Lookups';
     },
 

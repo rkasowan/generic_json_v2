@@ -12,7 +12,7 @@
  * an instance is visible in the response instead of needing a code comparison.
  */
 (function process(/*RESTAPIRequest*/ request, body) {
-    var LISTENER_VERSION = '2026.10.29.1';
+    var LISTENER_VERSION = '2026.10.29.2';
     var core = new x_usbna_usb_event.USBEM_Core({ request: request });
     var lookups = new x_usbna_usb_event.USBEM_Lookups(core);
     var debugHelper = new x_usbna_usb_event.USBEM_Debug(core);
@@ -67,6 +67,19 @@
         var response;
         var debugEventSysId = '';
 
+        // Reject malformed record shapes before processing any member. This preflight
+        // prevents shape errors from leaving earlier batch members inserted; it does
+        // not make later platform/database operations an atomic transaction.
+        if (!core.isObject(payload) && !core.isArray(payload)) {
+            throw new Error('Payload must be a JSON object or an array of JSON objects');
+        }
+        if (core.isObject(payload) && core.hasOwn(payload, 'records') && !core.isArray(payload.records)) {
+            throw new Error('records must be an array of JSON objects');
+        }
+        if (core.isObject(payload) && core.hasOwn(payload, 'events') && !core.isArray(payload.events)) {
+            throw new Error('events must be an array of JSON objects');
+        }
+
         if (core.isArray(payload)) {
             records = payload;
         } else if (core.isObject(payload) && core.isArray(payload.records)) {
@@ -79,6 +92,12 @@
             records = payload.events;
         } else {
             records = [payload];
+        }
+
+        for (i = 0; i < records.length; i++) {
+            if (!core.isObject(records[i])) {
+                throw new Error('Event at index ' + i + ' must be a JSON object');
+            }
         }
 
         for (i = 0; i < records.length; i++) {

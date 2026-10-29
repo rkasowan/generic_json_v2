@@ -2,11 +2,16 @@
 
 ## DTI runtime
 
-Release `2026.10.29.1` uses the Event Management Instance push connector, not a separate
+Release `2026.10.29.2` uses the Event Management Instance push connector, not a separate
 Scripted REST API. Its normal DTI path creates or reuses an incident, stores the message-key
 breadcrumb in `incident.correlation_id`, and returns promptly. The alert reconcile Business Rule
 links the later alert to that incident. Do not add a wait key to new callers; it is legacy
 compatibility only.
+
+Release gate: **corrected-path DEV retest PASS** on dev392825. The
+[release retest](validation-2026-10-29.2.md) records 714.405 seconds, 50 positive scenarios,
+ten invalid-payload probes, and 204 local tests. This does not certify production identities,
+instance-specific rules, or simultaneous-first-event safety.
 
 | Artifact | Target record/configuration |
 |---|---|
@@ -15,13 +20,16 @@ compatibility only.
 | `src/USBEM_Debug.js` | scoped Script Include `USBEM_Debug` |
 | `src/USBEM_DTI.js` | scoped Script Include `USBEM_DTI` |
 | `servicenow/USBEM_genericJsonV2.listener.js` | active Global `sn_em_connector_listener`, source `genericJsonV2`, Instance type |
-| `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js` | active Global `em_alert` after Business Rule, insert/update, order 150; not async |
+| `servicenow/USBEM_FastDtiAlertReconcile.business_rule.js` | active Global `em_alert` after Business Rule, Advanced=true, insert/update, order 150; not async |
 
 The Script Includes belong to `x_usbna_usb_event`; the listener and BR remain Global.
-`scripts/deploy_usbem.py` updates these six existing records and reads back their versions.
+`scripts/deploy_usbem.py` updates the known runtime records or creates a missing BR, verifies
+stored source/configuration after each write, and reports endpoint versions.
 Use [the clean-install guide](install_from_scratch.md) for prerequisites and initial configuration,
 and [the manual transfer package](dti_transfer_package.md) for record configuration and exclusions.
-Copy the BR condition as well as its script. Do not restore the retired queued-event/Script Action linker.
+Copy the exact `BR_CONDITION` from the deployer as well as the BR script. Pending work notes
+can run with an open linked Incident; DTI-only metadata retains the nil/terminal gate. Do not
+restore the retired queued-event/Script Action linker.
 
 ## ServiceNow dependencies
 
@@ -29,6 +37,9 @@ Copy the BR condition as well as its script. Do not restore the retired queued-e
 - Authorized connector endpoint: `/api/sn_em_connector/em/inbound_event?source=genericJsonV2`.
 - Cross-scope table and scriptable privileges from the clean-install guide, including Incident
   read/create/write and the reads needed for CI, caller, and assignment-group resolution.
+- Optional debug attachments require the exact scriptable privilege
+  `GlideSysAttachment.write / execute` for `x_usbna_usb_event`, reviewed in each target. DEV's
+  existing requested row was approved for testing; do not export that row or broad grants.
 - Per-instance `x_usbna_usb_event.default_caller_sys_id` pointing to the intended valid caller.
 - Valid local category/subcategory stored values and impact/urgency values. Validate caller,
   category, subcategory, urgency, impact, short description, and description on resulting incidents.
@@ -45,15 +56,22 @@ Copy the BR condition as well as its script. Do not restore the retired queued-e
 - `tests/ci_identifier_test.env.example`: non-secret template for target URL, Basic or OAuth
   credentials, CI fixtures, required Incident fields, and optional assignment-group expectation.
   Keep filled env files private; base64 is encoding, not credential protection.
-- `tests/test_ci_identifier_runner.py` and `tests/test_ci_lookup_precedence.js`: local behavior tests.
+- `tests/test_ci_identifier_runner.py`, `tests/test_ci_lookup_precedence.js`,
+  `tests/test_wrapper_passthrough.js`, `tests/test_listener_shape_contract.js`, and
+  `tests/test_deploy_usbem.py`: focused local behavior and installer tests.
 - `kb/generic_json_v2_dti_api_and_tests.md`: Knowledge source for API, BR, and laptop testing.
 - `scripts/deploy_dti_kb.py`: update the existing article, preserving its KB identity.
 - `docs/validation-2026-10-29.md`: DEV runtime/readback evidence and known limitations.
+- `docs/validation-2026-10-29-comprehensive.md`: prior comprehensive run and defects; preserve
+  alongside the new release's retest evidence rather than rewriting its historical results.
+- `docs/validation-2026-10-29.2.md`: corrected-path DEV release retest, source/configuration
+  hashes, retained evidence, fixes, observation windows, and acceptance limits.
 
-The focused laptop identity needs connector access plus `em_event` and `incident` read. The five
-standard cases retain seven tagged events and expect five incidents, including sequential replay
-checks. Each observation must remain correct for 30 seconds; a passing standard run takes at
-least 3.5 minutes plus request time. It does not query alerts, so it does not directly prove the BR
+The focused laptop identity needs connector access plus `em_event` and `incident` read. The ten
+standard cases retain twelve tagged Events and expect ten Incidents, including sequential replay
+checks and all five single-record wrappers (`event`, `payload`, `data`, `record`, `alert`). Each
+observation must remain correct for 30 seconds; twelve phases require at least six minutes plus
+request time for a passing standard run. It does not query alerts, so it does not directly prove the BR
 link; that was verified separately in DEV. Production rules and permissions must be validated
 in each target rather than inferred from DEV.
 

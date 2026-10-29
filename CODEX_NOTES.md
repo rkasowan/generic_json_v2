@@ -3,6 +3,46 @@
 Compact working state for the USBEM genericJsonV2 push connector. Detailed behaviour lives in
 `README.md` and `docs/`; this file is what a future session needs before touching the PDI.
 
+## Release 2026.10.29.2 (2026-10-29)
+
+- Corrected-path DEV retest PASS, not a universal production/concurrency guarantee. See
+  `docs/validation-2026-10-29.2.md`: 714.405 seconds (14:07:06.208–14:19:00.613 UTC),
+  47 main cases + three terminal lifecycles + ten negative payload probes; 280 functional
+  assertions, no unresolved failures, 69 prefixed processed Events + one debug companion,
+  44 Incidents and 48 Alerts. Two 15-sample stability windows were clean.
+- User approved all five corrections: wrapped Incident passthrough/AI+envelope precedence,
+  full shape preflight, installer Advanced/readback, follow-up Alert note condition, and the
+  exact DEV `GlideSysAttachment.write/execute` privilege. No table, service, scheduler, or
+  monitoring email was added. The accepted concurrent-first-event race is unchanged.
+- All six dev392825 sources match local `.2` SHA-256 and BR configuration. Record IDs:
+  Core `4312b4e0975c17105fb3ba6de053afa6`, Lookups `5312b4e0975c17105fb3ba6de053afaf`,
+  Debug `d31278e0975c17105fb3ba6de053af92`, DTI `9b1278e0975c17105fb3ba6de053af97`,
+  listener `ab1278e0975c17105fb3ba6de053afa9`, BR `631278e0975c17105fb3ba6de053afb4`.
+  Scope remains `96abfcbb97774b105fb3ba6de053afa6` / `x_usbna_usb_event` (enforcing);
+  listener/BR remain Global. Advanced=true, after insert/update, order150, not async.
+- Only privilege `9dde38ac97dc17105fb3ba6de053afce` was changed requested→allowed,
+  target `GlideSysAttachment.write`, execute. Nine success JSON artifacts downloaded and
+  parsed; `10_error_context.json` is conditional, not a required success attachment.
+- Initial Incident `INC0010066` existed while no Alert existed, returned in 1258ms, and later
+  linked to Alert0010108. Replays preserve required fields and reuse it. New unique follow-up
+  Alert note journaled exactly once; two no-note updates did not repeat it. All five wrappers
+  preserve required fields and Incident work notes. Lifecycle replacements: INC0010104→105
+  (resolved), INC0010106→107 (closed), INC0010108→109 (canceled), correct new Alert links.
+- Local validation: 65 Python + 26 CI + 39 listener-shape + 74 wrapper checks = 204 passing.
+  Laptop default is ten cases/twelve Events/ten Incidents/twelve stable phases (>=6 minutes).
+  It reads only Event+Incident, so it does not itself prove the BR link. No actual production
+  or restricted/OAuth identity run was performed; the live matrix used authorized browser HTTP.
+- Knowledge article1.3.0 is published on existing dev382837 KB0010025
+  (`3c617cbc9353c7d0c8ebf85bdd03d643`); title/body match source and active/latest/published
+  readback passed. New attachments download byte-for-byte: Python `8baa0d2093945b90c8ebf85bdd03d612`
+  (40089 bytes, SHA256 `2c8075d602e5a383a9a39613f4b09d0b2dbd18ba2fe4f0ae51a75906fa1a5f71`),
+  template `88ba0d2093945b90c8ebf85bdd03d6c8` (4538 bytes, SHA256
+  `38f214408e763fea22a423f96e1320d0e29ed56d88586d8617ed0d1778d4009b`), report
+  `3cbacde8939c1b90c8ebf85bdd03d6f2` (15212 bytes, SHA256
+  `8e0b8f922d9fd477d4ed958f1faed1e6acb5bc227cd0fa07cd205a51fe848d58`). Only the two
+  exact known obsolete Python/template attachment copies were removed after replacement
+  verification; they are recoverable from Git. Both historical reports remain attached.
+
 ## Release 2026.10.29.1 (2026-10-29)
 
 - Comprehensive follow-up gate is HOLD, not a clean pass. See

@@ -18,7 +18,7 @@ USBEM_Core.prototype = {
 
         // Release stamp. Every USBEM script carries one and the listener reports all of
         // them, so a stale copy on an instance shows up in the response body.
-        this.VERSION = '2026.10.29.1';
+        this.VERSION = '2026.10.29.2';
         this.COMPONENT = 'USBEM_Core';
         this.DEFAULT_SOURCE = 'GenericJSON';
         this.DEFAULT_DESCRIPTION = 'Generic JSON event';
@@ -362,6 +362,110 @@ USBEM_Core.prototype = {
             targetObj[targetKey] = match.value;
             this.deleteAtPath(container, match.path);
         }
+    },
+
+    /**
+     * Identify Event/SPECIAL aliases that must not become Incident field overrides.
+     * The intentional flat-payload Incident short_description passthrough is retained.
+     * Apply this only to newly flattened wrappers or the per-record override overlay;
+     * existing flat payload normalization and its alias selection remain unchanged.
+     */
+    isMappedPayloadAlias: function (key) {
+        var field;
+        var aliases;
+        var i;
+        // The real Incident short_description is intentionally supported alongside
+        // Event.description, just as it is in a flat payload.
+        if (key === 'short_description') {
+            return false;
+        }
+        for (field in this.FIELD_ALIASES) {
+            if (!this.hasOwn(this.FIELD_ALIASES, field)) {
+                continue;
+            }
+            aliases = this.FIELD_ALIASES[field];
+            for (i = 0; i < aliases.length; i++) {
+                if (key === aliases[i]) {
+                    return true;
+                }
+            }
+        }
+        for (field in this.SPECIAL_ALIASES) {
+            if (!this.hasOwn(this.SPECIAL_ALIASES, field)) {
+                continue;
+            }
+            aliases = this.SPECIAL_ALIASES[field];
+            for (i = 0; i < aliases.length; i++) {
+                if (key === aliases[i]) {
+                    return true;
+                }
+            }
+        }
+        return key === 'additional_info' || key === 'additionalInfo';
+    },
+
+    collectRemainingPayloadFields: function (container, excludeRootAliases) {
+        var collected = {};
+        var key;
+        var wrapper;
+        var wrapped;
+        if (!this.isObject(container)) {
+            return collected;
+        }
+        // Explicit outer fields win even when their value is blank, null or false.
+        for (key in container) {
+            if (!this.hasOwn(container, key)) {
+                continue;
+            }
+            if (this.hasOwn(this.WRAPPER_KEYS, key) && this.isObject(container[key])) {
+                continue;
+            }
+            if (excludeRootAliases && this.isMappedPayloadAlias(key)) {
+                continue;
+            }
+            collected[key] = this.deepClone(container[key]);
+        }
+        // Keep the same event > payload > data > record > alert precedence as extraction.
+        for (wrapper in this.WRAPPER_KEYS) {
+            if (!this.hasOwn(this.WRAPPER_KEYS, wrapper) || !this.isObject(container[wrapper])) {
+                continue;
+            }
+            wrapped = container[wrapper];
+            for (key in wrapped) {
+                // Never reintroduce a losing wrapped Event/SPECIAL alias as an Incident
+                // field (notably description/cmdb_ci/assignment_group).
+                if (this.hasOwn(wrapped, key) && !this.hasOwn(collected, key) &&
+                    !this.isMappedPayloadAlias(key)) {
+                    collected[key] = this.deepClone(wrapped[key]);
+                }
+            }
+        }
+        return collected;
+    },
+
+    /** Collect only a record's own Incident/context overrides, above envelope defaults. */
+    collectRecordPayloadOverrides: function (rawEvent) {
+        var working = this.deepClone(rawEvent);
+        var info = {};
+        var collected = {};
+        var match;
+        var key;
+        if (!this.isObject(working)) {
+            return collected;
+        }
+        match = this.extractFirstMatching(working, ['additional_info', 'additionalInfo']);
+        if (match) {
+            this.mergeAdditionalInfo(info, match.value);
+            this.deleteAtPath(working, match.path);
+        }
+        // Do not flatten objects inside additional_info: they are custom context.
+        for (key in info) {
+            if (this.hasOwn(info, key) && !this.isMappedPayloadAlias(key)) {
+                collected[key] = this.deepClone(info[key]);
+            }
+        }
+        this.mergeDeep(collected, this.collectRemainingPayloadFields(working, true));
+        return collected;
     },
 
     mergeAdditionalInfo: function (additionalInfo, rawAdditionalInfo) {
@@ -896,6 +1000,7 @@ USBEM_Core.prototype = {
             quality: {}
         };
         var fieldName;
+        var additionalInfoMatch;
 
         if (this.isObject(rawEvent)) {
             ctx.working = this.deepClone(ctx.envelope);
@@ -905,12 +1010,10 @@ USBEM_Core.prototype = {
             ctx.working.description = String(rawEvent);
         }
 
-        if (this.hasOwn(ctx.working, 'additional_info')) {
-            ctx.raw_additional_info = ctx.working.additional_info;
-            delete ctx.working.additional_info;
-        } else if (this.hasOwn(ctx.working, 'additionalInfo')) {
-            ctx.raw_additional_info = ctx.working.additionalInfo;
-            delete ctx.working.additionalInfo;
+        additionalInfoMatch = this.extractFirstMatching(ctx.working, ['additional_info', 'additionalInfo']);
+        if (additionalInfoMatch) {
+            ctx.raw_additional_info = additionalInfoMatch.value;
+            this.deleteAtPath(ctx.working, additionalInfoMatch.path);
         }
 
         ctx.remaining = this.deepClone(ctx.working);
@@ -941,7 +1044,11 @@ USBEM_Core.prototype = {
             }
         }
 
+        ctx.remaining = this.collectRemainingPayloadFields(ctx.remaining);
         this.mergeDeep(ctx.user_additional_info, ctx.remaining);
+        // A flat envelope default must not mask a wrapped per-record Incident field.
+        // Keep alias selection above unchanged; only passthrough fields are overlaid.
+        this.mergeDeep(ctx.user_additional_info, this.collectRecordPayloadOverrides(rawEvent));
 
         ctx.flags.debug_enabled = this.parseBoolean(ctx.special.usbem_debug, false);
         ctx.debug = this.newTrace(ctx.flags.debug_enabled);

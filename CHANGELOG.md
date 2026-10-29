@@ -2,6 +2,27 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.10.29.2 - 2026-10-29
+
+- preserve Incident-field overrides inside all five supported single-record wrappers (`event`,
+  `payload`, `data`, `record`, `alert`) and add each wrapper to the standalone Python acceptance suite
+- reject non-object records and invalid batch members before inserting any Events from that
+  request; this preflight does not make later runtime/database batch execution atomic
+- allow pending Alert work notes through the reconcile condition when an open Incident is linked,
+  while preserving nil/terminal gating for DTI-only metadata
+- explicitly set the BR's Advanced flag and verify stored ID, script, and configuration after
+  creation as well as update; add the previously missing Table API insert wrapper
+- document the exact optional `GlideSysAttachment.write / execute` privilege as a per-target
+  prerequisite, not a portable broad grant
+- extend the default laptop test to ten cases, twelve retained Events, ten expected Incidents,
+  and at least six minutes of stable observation plus request time; optional concurrency stress
+  and the owner-accepted simultaneous-first-event limitation are unchanged
+- pass the corrected-path DEV retest over 714.405 seconds: 50 positive scenarios, ten invalid
+  payload probes, 280 functional assertions, two stable observation windows, and 204 local tests;
+  exact six-source/configuration readback and target-specific debug privilege are verified
+- retain the historical failed report, accepted simultaneous-first-event race, and explicit
+  production-identity/fixture limitations in `docs/validation-2026-10-29.2.md`
+
 ## 2026.10.29.1 - 2026-10-29
 
 - restored the CI identity contract: explicit `cmdb_ci` sys_id wins, then class-scoped

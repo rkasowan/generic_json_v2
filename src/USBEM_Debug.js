@@ -14,7 +14,7 @@ var USBEM_Debug = Class.create();
 USBEM_Debug.prototype = {
     initialize: function (core) {
         this.core = core;
-        this.VERSION = '2026.10.29.1';
+        this.VERSION = '2026.10.29.2';
         this.COMPONENT = 'USBEM_Debug';
         this.ATTACHMENTS = [
             { key: 'raw_payload', name: '01_raw_payload.json', type: 'application/json' },

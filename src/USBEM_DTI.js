@@ -23,7 +23,7 @@ USBEM_DTI.prototype = {
         this.DEFAULT_DTI_TERMINAL_INCIDENT_STATES = '6,7,8';
         this.PENDING_MAP_POLL_MS = 100;
 
-        this.VERSION = '2026.10.29.1';
+        this.VERSION = '2026.10.29.2';
         this.COMPONENT = 'USBEM_DTI';
 
         // Field mapping inherited from the retired "EM - Generic Endpoint Create Incident"

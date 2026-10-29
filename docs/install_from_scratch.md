@@ -89,20 +89,22 @@ install, deactivate that Script Action and remove the event registration.
 | When | `after` — **not async** |
 | Insert / Update | true / true |
 | Order | 150 |
+| Advanced | true |
 | Condition | see below |
 | Active | true |
 
 ```javascript
-(current.additional_info.indexOf('direct_to_incident') > -1 ||
- current.additional_info.indexOf('work_notes') > -1) &&
-(current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)
+((current.getValue('additional_info') || '').indexOf('work_notes') > -1 ||
+ ((current.getValue('additional_info') || '').indexOf('direct_to_incident') > -1 &&
+  (current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)))
 ```
 
 The condition is what keeps this rule cheap: it only runs for an alert this connector is
-responsible for — one whose event asked for an incident or carried a work note — and only while
-that alert has no incident or holds a finished one. `alert_work_notes` matches the `work_notes`
-test as a substring, so both spellings are covered. Everything else on `em_alert` is filtered out
-before the script executes.
+responsible for. Pending work notes can run even when the alert already holds an open Incident;
+the rule journals the note before its incident-linking guards. For DTI-only metadata it runs only
+while that alert has no Incident or holds a finished one. `alert_work_notes` matches the
+`work_notes` test as a substring, so both spellings are covered. Everything else on `em_alert` is
+filtered out before the script executes.
 
 It attaches the alert link as soon as Event Management creates or updates an alert. Where the
 alert already existed, the fast path will usually have claimed it during the request instead; both
@@ -116,10 +118,10 @@ calculation to fail". dev382837 ran it as `async_always` with no condition until
 which is exactly the pattern that guidance prohibits.
 
 The condition does the heavy lifting: the rule is skipped entirely for alerts whose event never
-asked for an incident or carried a work note, and for alerts already holding a live incident. The
-Closed-alert and message-key guards are in the script rather than the condition, because they need
-the alert's state. When the rule does run and no open USBEM DTI incident exists for the key, the
-script costs one query and writes nothing.
+asked for an incident or carried a work note, and DTI-only alerts already holding a live Incident.
+Closed-alert and message-key linking guards are in the script rather than the condition, because
+they need the alert's state. If there is no note to journal and no open USBEM DTI Incident exists
+for the key, the script costs one query and writes nothing.
 
 ## 6. Properties [verified]
 
@@ -160,8 +162,8 @@ Only the level 2 field is in the resolution chain today. To add level 3, append 
 ## 8. Cross-scope privileges [verified]
 
 With `runtime_access_tracking = enforcing`, the scope needs explicit access to the tables it
-touches outside itself. Each missing privilege costs a feature, and the connector is written so
-that none of them costs an event:
+touches outside itself. Missing privileges can skip a feature or fail a request, depending on
+the operation; verify the exact grants rather than relying on a successful partial response:
 
 | Table | Access | What is lost without it |
 |---|---|---|
@@ -175,6 +177,13 @@ On an enforcing clean install, also allow the requested scriptable privileges
 `GlideRecord.setValue / execute` and `GlideRecord.update / execute`. These are required while the
 scoped runtime populates the Event and performs the post-create Incident update. This exact clean
 install set was exercised on dev392825 on 2026-10-29.
+
+For `usbem_debug=true`, also approve the specific requested scriptable privilege
+`GlideSysAttachment.write / execute` from this scope to Global. Otherwise the companion Debug
+Event can exist without any JSON attachments. Validate the nine success artifacts; the tenth,
+`10_error_context.json`, is conditional on an error. A debug-enabled response alone is
+insufficient. Approve the exact target-specific request, not a
+broad attachment/administration role, and never copy a PDI privilege sys_id into production.
 
 Grant them in **System Applications > Application Cross-Scope Access**. ServiceNow usually creates
 the row on `sys_scope_privilege` the first time a call is denied, with status `requested`, so the
@@ -191,6 +200,13 @@ Push the repo at the instance and read back what it is running:
 python3 scripts/deploy_usbem.py --dry-run   # what would change
 python3 scripts/deploy_usbem.py             # write it, then report live versions
 ```
+
+The deployer explicitly sets the reconcile rule's `advanced=true` on both creation and update.
+After either write it reads the stored record by its returned `sys_id` and verifies the script
+and every required configuration field, rather than trusting the write response or platform
+defaults. A missing record ID or mismatched stored field makes deployment fail. Re-running the
+deployer writes nothing when source and configuration already match; `--force` deliberately
+rewrites and verifies them.
 
 Then verify behaviour end to end:
 

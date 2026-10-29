@@ -1,10 +1,17 @@
-# Manual transfer package — genericJsonV2 connector, release 2026.10.29.1
+# Manual transfer package — genericJsonV2 connector, release 2026.10.29.2
 
-Everything that has to move out of dev382837 for this connector, as a package list for a manual
-export. Update sets are not the source of truth here; git is. Each record below is byte-identical
-to the file named beside it, and `scripts/deploy_usbem.py` writes exactly these six records.
+The source/configuration package to move between instances. Update sets are not the source of
+truth here; git is. The six source files below define the runtime. Historical dev382837 IDs are
+record locators only, not portable identities or proof that that instance runs this release.
+`scripts/deploy_usbem.py` updates the known records, can create a missing reconcile BR, and
+verifies stored source and configuration after each write.
 
-Source of truth: `rkasowan/generic_json_v2`, tag/commit for release `2026.10.29.1`.
+Source of truth: `rkasowan/generic_json_v2`, coherent release commit for `2026.10.29.2`.
+Release gate: **corrected-path DEV retest PASS** on dev392825; see
+[release evidence](validation-2026-10-29.2.md). The earlier
+[comprehensive validation](validation-2026-10-29-comprehensive.md) remains historical failure
+evidence. Production identity, local rules/fixtures, and the accepted concurrency limitation
+still require target-specific acceptance.
 
 ## 1. Records to move
 
@@ -32,16 +39,21 @@ block before believing anything else.
 | When | `after` — **not async** |
 | Insert / Update | true / true |
 | Order | 150 |
+| Advanced | true |
 | Active | true |
 
 ```javascript
-(current.additional_info.indexOf('direct_to_incident') > -1 ||
- current.additional_info.indexOf('work_notes') > -1) &&
-(current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)
+((current.getValue('additional_info') || '').indexOf('work_notes') > -1 ||
+ ((current.getValue('additional_info') || '').indexOf('direct_to_incident') > -1 &&
+  (current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)))
 ```
 
 Event Management best practices prohibit async business rules on alert tables. If the rule already
-exists in the target, check its `when` before overwriting the script.
+exists in the target, check its `when`, Advanced flag, and condition before overwriting the script.
+Pending Alert notes must run even with an open linked Incident; DTI-only metadata remains gated
+by nil/terminal Incident state. Copy this exact condition from `scripts/deploy_usbem.py`'s
+`BR_CONDITION`, not an older update set. Read back the stored rule after creation or update;
+the deployer fails on a missing record ID or mismatched script/configuration.
 
 ## 2. Create in the target, do not export
 
@@ -97,6 +109,11 @@ value stops taking effect — intended: an incident with no resolvable group is 
   `cmdb_rel_ci` read, CI-derived assignment groups cannot work at all. Both were granted on
   dev382837 on 2026-09-28. The rows usually exist already with status `requested` — flip them to
   `allowed` rather than creating new ones.
+- **Optional debug attachments.** Enabling `usbem_debug` attachments additionally requires the
+  exact scriptable privilege `GlideSysAttachment.write / execute` for `x_usbna_usb_event` in each
+  target. DEV's existing requested row was approved for testing; that approval is not portable.
+  Review and approve the target's exact requested privilege rather than exporting DEV's row or
+  granting broad attachment/table access. Read back a resulting attachment when testing debug.
 - **Group references.** Nothing hardcodes a group, but the CI fields point at `sys_user_group`
   records whose sys_ids differ per environment. CI data is not part of this package.
 
@@ -110,3 +127,19 @@ For a production selection the verifier defaults to limited access, submits even
 Incident/Alert readback, and retains tagged records. A custom target defaults to self-cleanup.
 Run `python3 scripts/deploy_usbem.py --dry-run` to compare the target's source records with this
 checkout; the verifier's `compat` group checks the endpoint's reported component versions.
+
+For the standalone work-laptop acceptance test, configure target-specific fixtures using
+`tests/ci_identifier_test.env.example` and run:
+
+```bash
+python3 tests/test_ci_identifier_precedence.py --report-file ci-test-report.json
+```
+
+The default ten fast-only cases cover flat CI precedence, sequential duplicates, required
+Incident fields, and all five single-record wrappers. They retain twelve Events and expect ten
+Incidents. Twelve observation phases at 30 seconds require at least six minutes plus request
+time. The test needs connector access plus `em_event` and `incident` read; it does not inspect
+Alert links, so validate BR linking and Alert-note journaling separately with an authorized
+identity. Optional `--include-concurrency` remains a stress check that fails if simultaneous
+first requests return/create different Incidents; the owner accepted this known race without a
+claim table. Do not interpret the default suite as proof of concurrency safety.

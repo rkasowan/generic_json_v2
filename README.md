@@ -1,25 +1,27 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.10.29.1`
+Repo version: `2026.10.29.2`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
-Release gate: **HOLD** after the [comprehensive DEV validation](docs/validation-2026-10-29-comprehensive.md).
-Flat DTI checks pass, but wrapped Incident overrides and follow-up Alert notes fail; debug
-attachments also lack an approved DEV scope privilege. These are separate from the accepted
-simultaneous-first-event race. No runtime fix was applied by that test run.
+Release gate: **corrected-path DEV retest PASS** for `2026.10.29.2` on dev392825.
+[The release retest](docs/validation-2026-10-29.2.md) records 714.405 seconds, 50 positive
+scenarios, ten malformed-payload probes, exact six-source readback, and 204 passing local tests.
+It closes the prior wrapped-field, follow-up Alert note, shape-validation, debug-privilege,
+and installer findings. This is not production-identity or concurrency certification:
+the accepted simultaneous-first-event race remains unchanged. Retest each target before promotion.
 
 Every script in this project carries that version, and the endpoint reports all of them in every
 response under `versions`, so you can tell what an instance is actually running without opening a
 single record:
 
 ```json
-"version": "2026.10.29.1",
-"versions": {"listener": "2026.10.29.1", "core": "2026.10.29.1",
-             "lookups": "2026.10.29.1", "debug": "2026.10.29.1", "dti": "2026.10.29.1"}
+"version": "2026.10.29.2",
+"versions": {"listener": "2026.10.29.2", "core": "2026.10.29.2",
+             "lookups": "2026.10.29.2", "debug": "2026.10.29.2", "dti": "2026.10.29.2"}
 ```
 
 The business rule has no response to report into, so it logs its version with every outcome
-(`USBEM fast DTI alert reconcile [v2026.10.29.1] outcome: ...`).
+(`USBEM fast DTI alert reconcile [v2026.10.29.2] outcome: ...`).
 
 The repo release version is separate from the locked standalone ServiceNow transform in
 `standalone/genericMappedJson_transform.js`, which remains `2026-03-18a` for the final path.
@@ -167,6 +169,12 @@ It also supports these helper inputs:
 There are no queued events, no Script Actions and no retry loop. The business rule is a
 synchronous `after` rule with a condition, because Event Management best practices say plainly:
 "Do not write async business rules for alert tables."
+
+The rule must have **Advanced=true**. Pending `work_notes` / `alert_work_notes` metadata can
+run even with an open linked Incident so follow-up Alert notes can be journaled. DTI-only
+metadata remains restricted to alerts with no Incident or a terminal Incident. Transfer the
+condition together with the script; the deployer verifies stored source and configuration after
+both creation and update. See [the exact BR configuration](docs/dti_transfer_package.md#the-business-rules-configuration-is-part-of-the-package).
 
 ### DTI with waiting
 
@@ -584,20 +592,21 @@ OAuth client credentials, and a corporate CA bundle. Existing production OAuth s
 selected with `--env-file tests/usbem_verify.env --profile itsmnowDEVworker` after adding the
 focused fixture keys from the supplied template. Keep filled env files private.
 
-All five standard cases use fast DTI and omit the wait key. They require a valid incident sys_id promptly
+All ten standard cases use fast DTI and omit the wait key. They require a valid incident sys_id promptly
 (default 10-second POST budget), then poll stored Incident and Event records separately. Normal
 operation creates the incident, stamps the message-key breadcrumb in `correlation_id`, returns,
 and lets the alert Business Rule link the later alert. The wait key remains legacy compatibility.
 
 Name-only and identifier-only controls prove the fixtures before conflicting-name tests run.
-The suite then tests explicit sys_id precedence, camelCase and snake_case inputs, and sequential
-duplicates. Every observation verifies the exact CI,
+The suite then tests explicit sys_id precedence, camelCase and snake_case inputs, sequential
+duplicates, and all five supported single-record wrappers (`event`, `payload`, `data`, `record`,
+`alert`) with Incident overrides inside the wrapper. Every observation verifies the exact CI,
 correlation ID, caller, category, subcategory, impact, urgency, short description, description,
 and configured assignment group. Each phase must remain correct for 30 seconds within its
-120-second deadline. A complete successful standard suite takes at least 3.5 minutes plus request time.
+120-second deadline. A complete successful standard suite takes at least six minutes plus request time.
 Timeouts and observation intervals are configurable. No POST is automatically retried.
 
-The standard suite retains seven tagged events and expects five incidents when it passes. Exit codes are
+The standard suite retains twelve tagged Events and expects ten Incidents when it passes. Exit codes are
 `0` pass, `2` functional failure, and `3` configuration/access/transport failure. It reads only
 `em_event` and `incident` and does not require CMDB, Scripts - Background, or deletion access.
 It does not directly inspect the alert or prove the BR link with this limited identity; alert-to-incident
@@ -623,12 +632,18 @@ for an optional stress check, which fails if requests create different incidents
   dev382837 as of 2026-09-28. The complete clean-install set was validated on dev392825 on
   2026-10-29; the rows usually already exist on `sys_scope_privilege` with status `requested`, so
   this is a status change, not a new record.
+- **Debug attachments require a separate scriptable privilege.** If optional `usbem_debug`
+  attachments are enabled, the target must explicitly approve `GlideSysAttachment.write / execute`
+  for `x_usbna_usb_event`. DEV approval of its existing requested row is target-specific; do not
+  export that row or replace it with broad attachment/table grants.
 - **No duplicate protection on the fast path.** Simultaneous events for one key can each open an
   incident. The extended 2026-10-29 DEV test reproduced two incidents for three simultaneous
   first events. The focused laptop suite fails this outcome rather than marking it observational.
-- **Message keys longer than `incident.correlation_id`** (100 characters out of box) can only be
-  matched through the alert link, because the correlation lookup queries the full key. An event
-  that arrives while the alert is briefly unlinked opens another incident.
+
+Long message keys are stored and looked up as a length-bounded prefix plus a stable short hash
+of the full key; keys that fit are unchanged. This avoids the former raw-key/truncated-column
+mismatch and distinguishes the tested shared-prefix keys. It is not a collision-proof identity
+scheme and does not remove the accepted concurrent-first-event race.
 
 ## Files in this bundle
 

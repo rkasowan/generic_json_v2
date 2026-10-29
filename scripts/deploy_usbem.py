@@ -34,8 +34,8 @@ import urllib.request
 from http.cookiejar import CookieJar
 from pathlib import Path
 
-VERSION = "2026.10.29.1"
-EXPECTED_RELEASE = "2026.10.29.1"
+VERSION = "2026.10.29.2"
+EXPECTED_RELEASE = "2026.10.29.2"
 
 MARK = "@@JSON@@"
 INSTANCE_KEYS = ("servicenow_instance", "SN_INSTANCE_URL", "SN_INSTANCE", "instance")
@@ -155,6 +155,7 @@ class ServiceNow:
 
     # ---- one request, either transport
     def _request(self, method: str, url: str, params=None, body=None, headers=None):
+        method = method.upper()
         headers = dict(headers or {})
         headers.setdefault("Accept", "application/json")
         if params:
@@ -164,8 +165,10 @@ class ServiceNow:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
 
-        last = None
-        for attempt in range(3):
+        # An insert/event POST may have committed even when its response is lost. Never
+        # replay it automatically; an operator must inspect stored state before rerunning.
+        attempts = 1 if method == "POST" else 3
+        for attempt in range(attempts):
             try:
                 if self._session is not None:
                     response = self._session.request(method, url, data=data, headers=headers,
@@ -186,18 +189,23 @@ class ServiceNow:
                 message = str(error)
                 if "CERTIFICATE_VERIFY_FAILED" in message or "certificate verify failed" in message:
                     raise ServiceNowError(
-                        f"TLS verification failed for {url}\n"
-                        f"  {message}\n"
+                        "TLS verification failed\n"
                         "  pip install certifi        (usual fix on macOS)\n"
                         "  --ca-bundle /path/root.pem to trust a corporate root\n"
                         "  --insecure                 to skip verification, last resort") from None
-                last = error
-                time.sleep(2 * (attempt + 1))
+                if method == "POST":
+                    raise ServiceNowError(
+                        "POST outcome unknown after a transport failure; the request was not "
+                        "retried. Read back the target state before rerunning.") from None
+                if attempt + 1 < attempts:
+                    time.sleep(2 * (attempt + 1))
         else:
-            raise ServiceNowError(f"{method} {url} failed after 3 attempts: {last}")
+            raise ServiceNowError(f"{method} request failed after {attempts} attempts") from None
 
         if status >= 400:
-            raise ServiceNowError(f"{method} {url} -> HTTP {status}: {text[:400]}")
+            # Response/transport bodies can echo credentials or submitted scripts. Keep
+            # failures controlled and non-secret; the HTTP status remains actionable.
+            raise ServiceNowError(f"{method} request -> HTTP {status}")
         if not text.strip():
             return None
         try:
@@ -221,6 +229,9 @@ class ServiceNow:
 
     def update(self, name: str, sys_id: str, payload: dict):
         return self._request("PATCH", f"{self.instance}/api/now/table/{name}/{sys_id}", body=payload) or {}
+
+    def insert(self, name: str, payload: dict):
+        return self._request("POST", f"{self.instance}/api/now/table/{name}", body=payload) or {}
 
     def delete(self, name: str, sys_id: str):
         self._request("DELETE", f"{self.instance}/api/now/table/{name}/{sys_id}")
@@ -307,9 +318,9 @@ SCOPE = "x_usbna_usb_event"
 # Management best practices forbid async rules on alert tables) that is filtered down to the
 # alerts this connector cares about before its script runs.
 BR_CONDITION = (
-    "((current.getValue('additional_info') || '').indexOf('direct_to_incident') > -1 || "
-    "(current.getValue('additional_info') || '').indexOf('work_notes') > -1) && "
-    "(current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)"
+    "((current.getValue('additional_info') || '').indexOf('work_notes') > -1 || "
+    "((current.getValue('additional_info') || '').indexOf('direct_to_incident') > -1 && "
+    "(current.incident.nil() || '6,7,8'.indexOf(current.incident.state.toString()) > -1)))"
 )
 
 COMPONENTS = [
@@ -366,6 +377,7 @@ COMPONENTS = [
             "collection": "em_alert",
         },
         "config": {
+            "advanced": "true",
             "when": "after",
             "action_insert": "true",
             "action_update": "true",
@@ -386,11 +398,15 @@ def normalize(text: str) -> str:
     return (text or "").replace("\r\n", "\n").rstrip("\n")
 
 
+def component_fields(component: dict) -> str:
+    fields = {"sys_id", "name", component["script_field"]}
+    fields.update(component.get("config", {}))
+    fields.update(component.get("create_if_missing", {}))
+    return ",".join(sorted(fields))
+
+
 def find_record(sn: ServiceNow, component: dict) -> dict | None:
-    fields = "sys_id,name," + component["script_field"]
-    extra = sorted(component.get("config", {}).keys())
-    if extra:
-        fields += "," + ",".join(extra)
+    fields = component_fields(component)
     rows = sn.table(component["table"], component["query"], fields, limit=5)
     if rows:
         if len(rows) > 1:
@@ -401,6 +417,24 @@ def find_record(sn: ServiceNow, component: dict) -> dict | None:
     except ServiceNowError:
         return None
     return row or None
+
+
+def verify_written_record(sn: ServiceNow, component: dict, sys_id: str,
+                          source: str) -> tuple[bool, str]:
+    """Verify stored state, never the insert/update response's optimistic payload."""
+    back = sn.record(component["table"], sys_id, component_fields(component))
+    problems = []
+    if back.get("sys_id") != sys_id:
+        problems.append("record ID missing or differs after write")
+    if normalize(back.get(component["script_field"], "")) != normalize(source):
+        problems.append("script differs after write")
+    expected = dict(component.get("create_if_missing", {}))
+    expected.update(component.get("config", {}))
+    mismatched = [field for field, want in expected.items()
+                  if str(back.get(field, "")) != str(want)]
+    if mismatched:
+        problems.append("fields not applied: " + ",".join(sorted(mismatched)))
+    return not problems, (" " + "; ".join(problems)) if problems else ""
 
 
 def deploy(sn: ServiceNow, dry_run: bool, force: bool) -> int:
@@ -427,10 +461,25 @@ def deploy(sn: ServiceNow, dry_run: bool, force: bool) -> int:
             payload.update(component.get("config", {}))
             payload[component["script_field"]] = source
             record = sn.insert(component["table"], payload)
-            print(f"{component['label']:<46} {'created':<12} {len(source):>7}  {record.get('sys_id','')}")
+            sys_id = record.get("sys_id", "")
+            if not sys_id:
+                print(f"{component['label']:<46} {'MISMATCH':<12} {len(source):>7}  "
+                      "create returned no record ID; cannot verify stored state")
+                failures += 1
+                continue
+            ok, detail = verify_written_record(sn, component, sys_id, source)
+            if not ok:
+                failures += 1
+            status = "created" if ok else "MISMATCH"
+            print(f"{component['label']:<46} {status:<12} {len(source):>7}  {sys_id}{detail}")
             continue
 
-        sys_id = record["sys_id"]
+        sys_id = record.get("sys_id", "")
+        if not sys_id:
+            print(f"{component['label']:<46} {'MISMATCH':<12} {len(source):>7}  "
+                  "matched record has no record ID")
+            failures += 1
+            continue
         payload = {}
         script_changed = normalize(record.get(component["script_field"], "")) != normalize(source)
         if script_changed or force:
@@ -448,18 +497,10 @@ def deploy(sn: ServiceNow, dry_run: bool, force: bool) -> int:
             continue
 
         sn.update(component["table"], sys_id, payload)
-        back = sn.record(component["table"], sys_id,
-                         "sys_id," + component["script_field"] +
-                         ("," + ",".join(sorted(component.get("config", {}))) if component.get("config") else ""))
-        ok = normalize(back.get(component["script_field"], "")) == normalize(source)
-        mismatched = [f for f, want in component.get("config", {}).items()
-                      if str(back.get(f, "")) != str(want)]
-        status = "written" if ok and not mismatched else "MISMATCH"
-        if status == "MISMATCH":
+        ok, detail = verify_written_record(sn, component, sys_id, source)
+        status = "written" if ok else "MISMATCH"
+        if not ok:
             failures += 1
-        detail = "" if ok else " script differs after write"
-        if mismatched:
-            detail += " fields not applied: " + ",".join(mismatched)
         print(f"{component['label']:<46} {status:<12} {len(source):>7}  {sys_id}{detail}")
 
     return failures

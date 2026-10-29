@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Observe CI precedence and duplicate DTI behavior through the real inbound-event API.
 
-Requires connector POST plus incident/em_event read access. The default five fast-DTI cases
-create seven tagged events and expect five incidents; all evidence is retained. A complete
-default run takes at least 3.5 minutes: seven phases remain correct for 30 seconds each.
+Requires connector POST plus incident/em_event read access. The default ten fast-DTI cases
+create twelve tagged events and expect ten incidents; all evidence is retained. A complete
+default run takes at least six minutes: twelve phases remain correct for 30 seconds each.
+The five CI controls/alias/duplicate cases are followed by all five supported payload wrappers,
+with the same exact Incident-field and CI checks as flat records.
 Control failures stop earlier. All payloads omit wait-for-incident keys. --include-concurrency
-adds a three-request first-event stress case (ten total events, six expected incidents).
+adds a three-request first-event stress case (fifteen total events, eleven expected incidents).
 Simultaneous first events can create duplicate incidents; this accepted limitation is reported
 even when the default suite passes. No POST is retried. This bounded suite does not prove
 concurrent safety, alert-to-incident linkage, or every production rule and incident lifecycle transition.
@@ -32,9 +34,10 @@ import urllib.parse
 import urllib.request
 import uuid
 
-EXPECTED_RELEASE = "2026.10.29.1"
+EXPECTED_RELEASE = "2026.10.29.2"
 SYS_ID = re.compile(r"[0-9a-fA-F]{32}\Z")
 IDENTIFIER_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z")
+PAYLOAD_WRAPPERS = ("event", "payload", "data", "record", "alert")
 
 
 def read_env(path: Path) -> dict[str, str]:
@@ -357,10 +360,12 @@ class Runner:
         raise CheckFailed("observation timed out: " + last_reason)
 
     def run_case(self, name: str, lookup: dict, expected_ci: str, snake: bool,
-                 duplicate: bool, key: str, submissions: int = 1) -> dict:
+                 duplicate: bool, key: str, submissions: int = 1, wrapper: str = "") -> dict:
+        if wrapper and wrapper not in PAYLOAD_WRAPPERS:
+            raise ValueError("unsupported test payload wrapper")
         started = self.clock()
         result = {"name": name, "message_key": key, "status": "running", "expected_cmdb_ci": expected_ci,
-                  "phases": [], "records_retained": True}
+                  "payload_wrapper": wrapper or "flat", "phases": [], "records_retained": True}
         mode = "fast_async"
         short_description = ("[SYNTHETIC] USBEM CI precedence " + name + " " + key)[:160]
         description = "CI precedence test " + key
@@ -385,6 +390,10 @@ class Runner:
         payload.update(lookup)
         if self.settings.assignment_group:
             payload["assignmentGroup"] = self.settings.assignment_group
+        if wrapper:
+            # Wrap the complete record, including the Incident-only field overrides. Keeping
+            # those fields at the root would miss the wrapper field-loss regression.
+            payload = {wrapper: payload}
         event_ids, incident_id = [], ""
         try:
             for phase_name in (("initial", "duplicate") if duplicate else ("initial",)):
@@ -462,27 +471,30 @@ class Runner:
         run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
         identity = {"ciType": settings.ci_type, "ciIdentifier": settings.identifier}
         cases = [
-            ("name_only_control", {"cmdb_ci": settings.decoy_name}, settings.decoy_id, False, False, 1),
-            ("identifier_only_control", identity, settings.expected_id, False, False, 1),
-            ("explicit_sys_id_precedence", dict(identity, cmdb_ci=settings.decoy_id), settings.decoy_id, False, False, 1),
-            ("fast_camel_conflict", dict(identity, cmdb_ci=settings.decoy_name), settings.expected_id, False, True, 1),
+            ("name_only_control", {"cmdb_ci": settings.decoy_name}, settings.decoy_id, False, False, 1, ""),
+            ("identifier_only_control", identity, settings.expected_id, False, False, 1, ""),
+            ("explicit_sys_id_precedence", dict(identity, cmdb_ci=settings.decoy_id), settings.decoy_id, False, False, 1, ""),
+            ("fast_camel_conflict", dict(identity, cmdb_ci=settings.decoy_name), settings.expected_id, False, True, 1, ""),
             ("fast_snake_conflict", {"ci_type": settings.ci_type, "ci_identifier": settings.identifier,
-                                     "cmdb_ci": settings.decoy_name}, settings.expected_id, True, True, 1),
+                                     "cmdb_ci": settings.decoy_name}, settings.expected_id, True, True, 1, ""),
         ]
+        cases.extend(("wrapped_" + wrapper, dict(identity, cmdb_ci=settings.decoy_name),
+                      settings.expected_id, False, False, 1, wrapper)
+                     for wrapper in PAYLOAD_WRAPPERS)
         if settings.include_concurrency:
             cases.append(("concurrent_fast_duplicates", dict(identity, cmdb_ci=settings.decoy_name),
-                          settings.expected_id, False, False, 3))
+                          settings.expected_id, False, False, 3, ""))
         started = self.clock()
         results = []
         stop_reason = ""
-        for index, (name, lookup, expected_ci, snake, duplicate, submissions) in enumerate(cases):
+        for index, (name, lookup, expected_ci, snake, duplicate, submissions, wrapper) in enumerate(cases):
             if stop_reason:
                 results.append({"name": name, "status": "skipped", "reason": stop_reason})
                 continue
             if progress:
                 progress("Running " + name + " (stable observation " + str(settings.stable_seconds) + "s per phase)")
             key = "USBEM-CIP-" + run_id + "-" + str(index + 1)
-            result = self.run_case(name, lookup, expected_ci, snake, duplicate, key, submissions)
+            result = self.run_case(name, lookup, expected_ci, snake, duplicate, key, submissions, wrapper)
             results.append(result)
             if progress:
                 progress(name + ": " + result["status"] + " after " + str(result["elapsed_seconds"]) + "s")
@@ -497,7 +509,7 @@ class Runner:
                 "phase_timeout_seconds": settings.timeout, "stable_seconds": settings.stable_seconds,
                 "fast_post_max_seconds": settings.fast_post_max_seconds,
                 "records_retained": True, "post_retries": 0,
-                "scope": "Fast DTI CI precedence, incident fields and sequential duplicates, using records visible to the test identity; not legacy wait mode, alert linkage or complete incident lifecycle",
+                "scope": "Fast DTI CI precedence, exact incident fields in flat/all five supported wrappers, and sequential duplicates, using records visible to the test identity; not legacy wait mode, alert linkage or complete incident lifecycle",
                 "concurrency_included": settings.include_concurrency,
                 "accepted_residual_limitation": "Simultaneous first events for the same message key can create duplicate incidents. A default pass does not assert concurrent safety.",
                 "concurrency_note": ("The optional race case fails on divergent incidents; one passing race does not prove every interleaving."

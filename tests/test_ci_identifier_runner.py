@@ -59,6 +59,8 @@ class FakeClient:
         self.pushes.append(copy.deepcopy(payload))
         if self.push_error:
             raise self.push_error
+        if len(payload) == 1 and next(iter(payload)) in ("event", "payload", "data", "record", "alert"):
+            payload = next(iter(payload.values()))
         key = payload["message_key"]
         state = self.records.setdefault(key, {"events": [], "ci": "", "incident": format(len(self.records) + 1, "032x")})
         event_id = format(len(self.pushes) + 100, "032x")
@@ -265,25 +267,74 @@ class RunnerTests(unittest.TestCase):
     def test_default_matrix_is_fast_only_with_both_aliases_and_no_stress(self):
         result = self.runner.run()
         self.assertEqual(result["status"], "pass")
-        self.assertEqual(len(result["cases"]), 5)
-        self.assertEqual(len(self.client.pushes), 7)
-        self.assertEqual(result["elapsed_seconds"], 21)
+        self.assertEqual(len(result["cases"]), 10)
+        self.assertEqual(len(self.client.pushes), 12)
+        self.assertEqual(result["elapsed_seconds"], 36)
         self.assertFalse(result["concurrency_included"])
         self.assertIn("does not assert concurrent safety", result["accepted_residual_limitation"])
         self.assertTrue(any(payload.get("direct_to_incident") and "ci_identifier" in payload
                             for payload in self.client.pushes))
-        self.assertTrue(all("dti_wait_for_incident" not in payload and "dtiWaitForIncident" not in payload
-                            for payload in self.client.pushes))
+        self.assertTrue(all("dti_wait_for_incident" not in json.dumps(payload) and
+                            "dtiWaitForIncident" not in json.dumps(payload) for payload in self.client.pushes))
         self.assertTrue(all(phase["actual_incident_fields"] == case["expected_incident_fields"]
                             for case in result["cases"] for phase in case["phases"]))
 
-    def test_optional_stress_adds_sixth_case_and_three_concurrent_submissions(self):
+    def test_all_five_wrappers_contain_complete_field_overrides_and_ci_conflict(self):
+        self.settings.assignment_group = GROUP
+        self.settings.expected_assignment_group_id = GROUP
+        result = self.runner.run()
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual([case["payload_wrapper"] for case in result["cases"]],
+                         ["flat"] * 5 + ["event", "payload", "data", "record", "alert"])
+        self.assertEqual([case["name"] for case in result["cases"][:5]],
+                         ["name_only_control", "identifier_only_control", "explicit_sys_id_precedence",
+                          "fast_camel_conflict", "fast_snake_conflict"])
+        # The first five cases generate seven requests; the remaining five are one wrapper each.
+        for wrapper, raw, case in zip(("event", "payload", "data", "record", "alert"),
+                                      self.client.pushes[7:], result["cases"][5:]):
+            with self.subTest(wrapper=wrapper):
+                self.assertEqual(set(raw), {wrapper})
+                nested = raw[wrapper]
+                self.assertEqual(nested["message_key"], case["message_key"])
+                self.assertEqual(nested["cmdb_ci"], "decoy")
+                self.assertEqual(nested["ciType"], "cmdb_ci_server")
+                self.assertEqual(nested["ciIdentifier"], {"serial_number": "test"})
+                self.assertEqual(nested["assignmentGroup"], GROUP)
+                self.assertTrue(nested["directToIncident"])
+                for field in ("caller_id", "category", "subcategory", "description"):
+                    self.assertEqual(nested[field], case["expected_incident_fields"][field])
+                self.assertEqual(nested["dtiImpact"], case["expected_incident_fields"]["impact"])
+                self.assertEqual(nested["dtiUrgency"], case["expected_incident_fields"]["urgency"])
+                self.assertEqual(nested["dtiShortDescription"], case["expected_incident_fields"]["short_description"])
+                self.assertEqual(case["phases"][0]["actual_incident_count"], 1)
+                self.assertEqual(case["phases"][0]["actual_assignment_group"], GROUP)
+
+    def test_each_wrapper_fails_when_nested_incident_fields_are_lost(self):
+        for wrapper in ("event", "payload", "data", "record", "alert"):
+            with self.subTest(wrapper=wrapper):
+                self.setUp()
+                original_push = self.client.push
+
+                def losing_field(source, payload, timeout):
+                    damaged = copy.deepcopy(payload)
+                    del damaged[wrapper]["caller_id"]
+                    return original_push(source, damaged, timeout)
+
+                self.client.push = losing_field
+                result = self.runner.run_case("wrapper_regression", {"ciType": "cmdb_ci_server",
+                                              "ciIdentifier": {"serial_number": "test"}, "cmdb_ci": "decoy"},
+                                              EXPECTED, False, False, "KEY", wrapper=wrapper)
+                self.assertEqual(result["status"], "fail")
+                self.assertIn("caller_id", result["reason"])
+                self.assertEqual(len(self.client.pushes), 1)
+
+    def test_optional_stress_adds_eleventh_case_and_three_concurrent_submissions(self):
         self.settings.include_concurrency = True
         result = self.runner.run()
         self.assertEqual(result["status"], "pass")
-        self.assertEqual(len(result["cases"]), 6)
-        self.assertEqual(len(self.client.pushes), 10)
-        self.assertEqual(result["elapsed_seconds"], 24)
+        self.assertEqual(len(result["cases"]), 11)
+        self.assertEqual(len(self.client.pushes), 15)
+        self.assertEqual(result["elapsed_seconds"], 39)
         self.assertTrue(result["concurrency_included"])
         self.assertEqual(result["cases"][-1]["name"], "concurrent_fast_duplicates")
         self.assertEqual(result["cases"][-1]["phases"][0]["actual_event_count"], 3)
@@ -293,7 +344,7 @@ class RunnerTests(unittest.TestCase):
         original_push = self.client.push
 
         def divergent_only_in_stress(source, payload, timeout):
-            self.client.different_concurrent = payload["message_key"].endswith("-6")
+            self.client.different_concurrent = payload.get("message_key", "").endswith("-11")
             return original_push(source, payload, timeout)
 
         self.client.push = divergent_only_in_stress
