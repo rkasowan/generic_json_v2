@@ -3,6 +3,13 @@
 Compact working state for the USBEM genericJsonV2 push connector. Detailed behaviour lives in
 `README.md` and `docs/`; this file is what a future session needs before touching the PDI.
 
+## Release 2026.10.29.1 (2026-10-29)
+
+- CI resolution precedence is explicit sys_id, then `ci_type` + `ci_identifier`, then textual
+  `cmdb_ci`; a display/name value can no longer bypass a valid class-scoped identifier.
+- `tests/test_ci_identifier_precedence.py` is the standalone post-deployment laptop test. It uses
+  an ignored env file and a deliberately different existing CI name to prove identifier precedence.
+
 ## Live objects (dev382837)
 
 | Record | Table | sys_id |

@@ -74,8 +74,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-VERSION = "2026.09.30.1"
-EXPECTED_RELEASE = "2026.09.30.1"      # what the live endpoint should report; --expect-version overrides
+VERSION = "2026.10.29.1"
+EXPECTED_RELEASE = "2026.10.29.1"      # what the live endpoint should report; --expect-version overrides
 
 RESOLVED_STATE = ("6", "Resolved")
 RESOLUTION_FIELDS = {

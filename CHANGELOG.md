@@ -2,6 +2,13 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## 2026.10.29.1 - 2026-10-29
+
+- restored the CI identity contract: explicit `cmdb_ci` sys_id wins, then class-scoped
+  `ci_type` + `ci_identifier`, with textual `cmdb_ci` used only as a fallback
+- added a standalone work-laptop regression test that deliberately supplies a different valid CI
+  name and passes only when the identifier-selected CI reaches the DTI incident
+
 ## 2026.09.30.1 - 2026-09-30
 
 - caller and assignee inputs accept sys_ids or exact full names, resolved by the scoped Script

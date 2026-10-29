@@ -14,7 +14,7 @@ var USBEM_Lookups = Class.create();
 USBEM_Lookups.prototype = {
     initialize: function (core) {
         this.core = core;
-        this.VERSION = '2026.09.30.1';
+        this.VERSION = '2026.10.29.1';
         this.COMPONENT = 'USBEM_Lookups';
     },
 
@@ -1695,6 +1695,7 @@ USBEM_Lookups.prototype = {
         var dummyCi = '';
         var nodeResolution;
         var explicitCmdbCiInput = this.core.hasValue(ctx.mapped.cmdb_ci);
+        var explicitCmdbCiIsSysId = explicitCmdbCiInput && this.core.looksLikeSysId(ctx.mapped.cmdb_ci);
 
         if (this.core.hasValue(ctx.mapped.ci_type)) {
             ctx.ci_type_resolution = this.resolveCiTypeTable(ctx.mapped.ci_type, ctx.debug);
@@ -1705,34 +1706,21 @@ USBEM_Lookups.prototype = {
             }
         }
 
-        if (this.core.hasValue(ctx.mapped.cmdb_ci)) {
+        // A caller-supplied sys_id is authoritative. A textual cmdb_ci is only a fallback when
+        // ci_type + ci_identifier are also present: identifiers are the stronger, class-scoped
+        // identity contract and must not be bypassed by an incidental/display name.
+        if (explicitCmdbCiIsSysId) {
             ctx.attempts.ci = true;
-            if (this.core.looksLikeSysId(ctx.mapped.cmdb_ci)) {
-                result = this.validateCmdbCiSysId(ctx.mapped.cmdb_ci, ctx.debug);
-                resolution = {
-                    status: result ? 'matched' : 'not_found',
-                    method: 'provided_sys_id',
-                    count: result ? 1 : 0,
-                    rows: result ? [result] : [],
-                    match: result,
-                    selection_reason: result ? 'provided_sys_id' : 'not_found',
-                    lookup_table: 'cmdb_ci'
-                };
-            } else {
-                exact = this.resolveCmdbCiByName(ctx.mapped.cmdb_ci, ctx.debug);
-                resolution = {
-                    status: exact.match ? 'matched' : (exact.ambiguous ? 'ambiguous' : 'not_found'),
-                    method: exact.method || 'cmdb_ci_name',
-                    count: exact.count,
-                    rows: exact.rows,
-                    match: exact.match,
-                    selection_reason: exact.selection_reason,
-                    lookup_table: 'cmdb_ci'
-                };
-                if (exact.match) {
-                    result = exact.match;
-                }
-            }
+            result = this.validateCmdbCiSysId(ctx.mapped.cmdb_ci, ctx.debug);
+            resolution = {
+                status: result ? 'matched' : 'not_found',
+                method: 'provided_sys_id',
+                count: result ? 1 : 0,
+                rows: result ? [result] : [],
+                match: result,
+                selection_reason: result ? 'provided_sys_id' : 'not_found',
+                lookup_table: 'cmdb_ci'
+            };
             this.core.traceLookup(ctx.debug, 'cmdb_ci', resolution);
         }
 
@@ -1752,6 +1740,24 @@ USBEM_Lookups.prototype = {
                 result = exact.match;
             }
             this.core.traceLookup(ctx.debug, 'ci_identifier', resolution);
+        }
+
+        if (!result && explicitCmdbCiInput && !explicitCmdbCiIsSysId) {
+            ctx.attempts.ci = true;
+            exact = this.resolveCmdbCiByName(ctx.mapped.cmdb_ci, ctx.debug);
+            resolution = {
+                status: exact.match ? 'matched' : (exact.ambiguous ? 'ambiguous' : 'not_found'),
+                method: exact.method || 'cmdb_ci_name',
+                count: exact.count,
+                rows: exact.rows,
+                match: exact.match,
+                selection_reason: exact.selection_reason,
+                lookup_table: 'cmdb_ci'
+            };
+            if (exact.match) {
+                result = exact.match;
+            }
+            this.core.traceLookup(ctx.debug, 'cmdb_ci', resolution);
         }
 
         if (!result && this.core.hasValue(ctx.mapped.resource)) {

@@ -1,10 +1,10 @@
-# Manual transfer package — genericJsonV2 connector, release 2026.09.30.1
+# Manual transfer package — genericJsonV2 connector, release 2026.10.29.1
 
 Everything that has to move out of dev382837 for this connector, as a package list for a manual
 export. Update sets are not the source of truth here; git is. Each record below is byte-identical
 to the file named beside it, and `scripts/deploy_usbem.py` writes exactly these six records.
 
-Source of truth: `rkasowan/generic_json_v2`, tag/commit for release `2026.09.30.1`.
+Source of truth: `rkasowan/generic_json_v2`, tag/commit for release `2026.10.29.1`.
 
 ## 1. Records to move
 

@@ -1,6 +1,6 @@
 # Generic Mapped JSON Push Connector
 
-Repo version: `2026.09.30.1`
+Repo version: `2026.10.29.1`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
 Every script in this project carries that version, and the endpoint reports all of them in every
@@ -8,13 +8,13 @@ response under `versions`, so you can tell what an instance is actually running 
 single record:
 
 ```json
-"version": "2026.09.30.1",
-"versions": {"listener": "2026.09.30.1", "core": "2026.09.30.1",
-             "lookups": "2026.09.30.1", "debug": "2026.09.30.1", "dti": "2026.09.30.1"}
+"version": "2026.10.29.1",
+"versions": {"listener": "2026.10.29.1", "core": "2026.10.29.1",
+             "lookups": "2026.10.29.1", "debug": "2026.10.29.1", "dti": "2026.10.29.1"}
 ```
 
 The business rule has no response to report into, so it logs its version with every outcome
-(`USBEM fast DTI alert reconcile [v2026.09.30.1] outcome: ...`).
+(`USBEM fast DTI alert reconcile [v2026.10.29.1] outcome: ...`).
 
 The repo release version is separate from the locked standalone ServiceNow transform in
 `standalone/genericMappedJson_transform.js`, which remains `2026-03-18a` for the final path.
@@ -334,10 +334,14 @@ written there. With `usbem_debug=true` they go to the companion debug event as a
 
 The transform can resolve `cmdb_ci` by:
 - provided `cmdb_ci` sys_id
+- `ci_type` + nested `ci_identifier`
 - exact `cmdb_ci.name`
 - canonical/token fallback for names with underscores, symbols, and separators
-- `ci_type` + nested `ci_identifier`
 - exact-name fallback when `node` is empty and a `name` is present
+
+When a payload contains both a textual `cmdb_ci` and `ci_type` + `ci_identifier`, the class-scoped
+identifier lookup wins. A literal `cmdb_ci` sys_id remains authoritative. The textual name is used
+only when the identifier does not resolve.
 
 `ci_type` can be sent as either:
 - the table name, such as `cmdb_ci_linux_server`, or
@@ -559,6 +563,22 @@ To check the instance against this checkout rather than only its self-reported v
 `python3 scripts/deploy_usbem.py --dry-run` — it prints any record whose script differs from the
 repo.
 
+### Focused CI identifier regression test
+
+For a small post-deployment check from a work laptop, copy the standalone script and its template,
+then configure one identifier-selected CI and a different existing CI name:
+
+```bash
+cp tests/ci_identifier_test.env.example tests/ci_identifier_test.env
+python3 tests/test_ci_identifier_precedence.py
+```
+
+The script needs only stock Python 3.9+, the connector URL, Basic API credentials (plain or
+base64-encoded), the CI class, a unique identifier JSON object, the expected CI sys_id, and a
+decoy CI name. It creates and retains one tagged DTI incident. The check passes only when the
+incident's `cmdb_ci` equals the identifier-selected sys_id; a name-first regression selects the
+decoy and returns exit code 2. The filled env file is ignored by Git.
+
 ## Known gaps
 
 - **The scope needs its cross-scope privileges.** `x_usbna_usb_event` runs with
@@ -591,6 +611,8 @@ Tooling:
 
 - `scripts/deploy_usbem.py` — push the repo to an instance and read back its versions
 - `tests/usbem_verify.py` — live end-to-end verification, one self-contained file
+- `tests/test_ci_identifier_precedence.py` — focused laptop regression check for identifier precedence
+- `tests/ci_identifier_test.env.example` — non-secret configuration template for that check
 - `requirements.txt` — nothing required; `requests`/`certifi` only if TLS needs them
 
 Docs:
