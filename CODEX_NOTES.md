@@ -3,7 +3,38 @@
 Compact working state for the USBEM genericJsonV2 push connector. Detailed behaviour lives in
 `README.md` and `docs/`; this file is what a future session needs before touching the PDI.
 
-## Restricted production tester delivery (2026-10-29)
+## One-command laptop test (2026-10-29)
+
+- Owner explicitly rejected flags/options after filling the existing catalog. Run only
+  `python test_ci_identifier_precedence.py`; the SAME standalone file reads script-relative
+  `production_test.env` and `dev-fixtures.json`, prints a short summary and saves private
+  unique `dti-results-*.json`. Do not replace the owner's filled files. UTF-8 BOM and the
+  historical `dev-fixutres.json` typo are supported (correct spelling wins).
+- Suite 1.3.0 / article 1.7.0; runtime 2026.10.29.3 unchanged. Frozen SHA256
+  `c39760011c871a659ae40e2c5cc03ca592f4b702d93439d1acd01739298748ab`.
+  Final offline validation: 446 Python in 42.223s + 234 JS = 680, including 30 new laptop tests.
+  The strict native-Alert model visits 85 actual callbacks (84 PASS + 1 accepted race); not live proof.
+- No-argument mode forces ProductionClient and never inherits shell connection settings.
+  Nonblank file USBEM_DEV_URL wins, otherwise file SN_INSTANCE_URL; never auto-advance/fallback
+  to IT/UAT/PROD. Optional fixture/field problems skip only affected features and produce
+  INCOMPLETE, never PASS. Baseline controls still stop writes. All 85 manifest entries remain.
+- Exact updated script attachment is byte-verified on matching dev392825 KB0010015:
+  a3391ba09710d7105fb3ba6de053afd3. Prior script was replaced only after recovery/byte proof;
+  historical reports and filled configs are untouched. Focused seven-check DEV harness completed
+  in 132.586s: 5 PASS / 2 deliberate SKIP, correct INCOMPLETE exit 4; three cases, four POSTs,
+  zero PATCHes, minimum stability 30.011s. Fresh three-GET/zero-write audit: four Processed Events,
+  three Incidents, three Alerts, 21 required-field checks; expected fields/links unchanged.
+  Harness uses selected dispatch and in-memory DEV credentials; sidecar parsing/complete dispatch
+  tested offline, not an actual restricted identity or full 85-feature live run. Initial harness
+  serialization failure retained privately, not PASS; source unchanged. Article 1.7.0 is published,
+  active/latest with exact body and reader links verified (22 attachments). Script, usage, new summary,
+  raw focused and readback attachments are API/reader byte-verified and unavailable anonymously.
+  Only old script/usage copies were replaced, recoverably. Sanitized source and summary form this
+  public Git milestone; detailed reports remain private. See
+  docs/validation-2026-10-29-one-command.md. No runtime/security/schema change,
+  business-app privilege approval, corporate access, backup, service or notifier.
+
+## Historical restricted production tester delivery (2026-10-29)
 
 - Owner now needs the full laptop test with only Event R, Alert RWC and Incident RWC, plus
   the existing connector POST, and the complete program attached to the same DEV KB. No

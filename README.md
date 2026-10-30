@@ -3,14 +3,31 @@
 Repo version: `2026.10.29.3`
 Release history: [CHANGELOG.md](CHANGELOG.md)
 
-Current laptop deliverable: **Python suite `1.2.0`, published article `1.6.0`**, with an explicit
-`--access-profile production` mode for connector POST + Event R + Alert RW + Incident RW.
-Use this mode with the existing production identity; it never requests reference/admin tables,
-provisions data, or falls back to an administrator. The runtime remains `2026.10.29.3`.
-Focused DEV validation under the enforced three-table request boundary is complete. The matching
-DEV article is published and its body/current attachment downloads are verified. No actual production instance or restricted
-production identity is claimed tested.
-Local validation passed 416 Python and 234 JavaScript checks (650 total), including 102
+Current laptop deliverable: **Python suite `1.3.0`, published article `1.7.0`**. Put the updated script,
+your `production_test.env`, and your already-filled `dev-fixtures.json` in the same private folder,
+then run `python test_ci_identifier_precedence.py`. No flags, options, pip packages or extra
+test program are needed. A readable summary appears on screen; detailed JSON results are saved
+automatically beside the script.
+Missing optional advanced fixtures are reported INCOMPLETE without blocking the baseline tests;
+they never become PASS. The 85-entry report retains the enforced connector POST + Event R +
+Alert RW + Incident RW boundary, with no reference/admin reads or administrator fallback.
+Runtime `2026.10.29.3` is unchanged. Updated-version offline validation passes 446 Python tests
+plus 234 JavaScript checks (680 total), including 30 new laptop-entry tests. The frozen suite
+1.3.0 program SHA-256 is `c39760011c871a659ae40e2c5cc03ca592f4b702d93439d1acd01739298748ab`.
+Focused DEV invocation proof completed in 132.586 seconds: five selected checks passed and two
+deliberately unavailable optional features were skipped, correctly producing INCOMPLETE/exit 4.
+Independent GET-only readback verified four Processed Events, three Incidents, three Alerts and
+21 required-field checks. This used the actual no-argument path with private focused dispatch
+and an in-memory DEV connection; sidecar parsing was tested offline. It is not all-85 live
+acceptance or actual restricted production-identity proof. Article `1.7.0` is published and
+reader-verified in matching dev392825, with exact source-body readback and actual attachment links.
+See [the three-step laptop instructions](docs/production-test-usage.md).
+Updated-version evidence: [one-command validation](docs/validation-2026-10-29-one-command.md).
+
+Historical suite `1.2.0` / article `1.6.0` evidence follows. Those exact bytes were validated and
+published in matching DEV; this is not validation of suite `1.3.0`. No actual production instance
+or restricted production identity is claimed tested.
+Historical local validation passed 416 Python and 234 JavaScript checks (650 total), including 102
 production unit methods. The independent native-Alert model exercised all 85 actual production
 callbacks: 84 passed and one reported the accepted concurrency limitation. Its 102 modeled cases
 made 119 connector calls, 11 negative probes, 24 formatted-note reads, three debug companions
@@ -47,14 +64,16 @@ the accepted simultaneous-first-event race remains unchanged. Retest each target
 
 The existing matching DEV Knowledge article is
 [KB0010015 on dev392825](https://dev392825.service-now.com/kb_view.do?sys_kb_id=7433ede097d457105fb3ba6de053af9b),
-Article `1.6.0` is published, active, latest and reader-verified there, with reader-visible
-attachments and an exact normalized body readback. Current program/configuration and evidence uploads were byte-verified
-through authenticated API and reader downloads; anonymous download requests do not return files.
-The reader renders actual download links for the Python program, production env/catalog and usage
-guide. Only the previous Python/common-env attachments were replaced, with recovery copies
-retained; historical reports remain intact. Article `1.4.0` is prior historical evidence, and
+where article `1.7.0` is published, active, latest and reader-verified with reader-visible
+attachments and exact normalized source-body readback. The current Python program and new focused
+evidence were byte-verified through authenticated API and reader downloads; anonymous requests
+do not return files. The reader renders actual download links for the Python program, production
+env/catalog and usage guide. Previous script/usage copies are replaced with recovery copies
+retained; historical reports remain intact. Article `1.6.0` is the prior suite's historical evidence;
+article `1.4.0` is older historical evidence, and
 `1.5.0` was never published. The provisioned administrative full retest remains incomplete.
-Public Git publication is authorized but not yet claimed complete. Full machine reports
+The historical sanitized milestone is published as `6e7c1a5`; this suite `1.3.0` release contains
+reviewed sanitized source and summary. Full machine reports
 and filled fixtures remain private to the matching PDI/ignored local evidence.
 Implementation and documentation must use the same explicitly selected PDI.
 
@@ -87,12 +106,13 @@ The repo also includes ATF assets for environment testing:
 
 The DTI deliverable is the connector API, its correlation-based alert reconcile Business Rule,
 and one comprehensive standalone Python tester in `tests/test_ci_identifier_precedence.py`.
-The historical filename retains the broader comprehensive manifest by default; select
-`--access-profile production` for the three-table production functional manifest. Download that
-one program plus the production env and fixture-catalog templates from the same DEV KB.
+The historical filename is retained. Running it without arguments now selects the three-table
+production-safe laptop workflow and reads the existing sidecar configuration files. It does not
+require another Python program, new options or replacement of your filled fixtures.
 Runtime `.3` is already deployed and six-source readback matched. Prior reports are historical
-runtime evidence, not a pass for the current tester. Matching DEV article `1.6.0`, its current
-test/configuration downloads and scoped validation evidence are published and reader-verified.
+runtime evidence, not a pass for the updated tester. Matching DEV article `1.7.0` and its current
+script/configuration/usage links are published and reader-verified. Suite `1.2.0` / article `1.6.0`
+evidence remains historical.
 Historical `1.4.0` reports remain; no article `1.5.0` publication is claimed.
 The test runs on demand from a work laptop; no Linux service, root account, scheduler, or
 monitoring email setup is required. See [the DTI API and test guide](kb/generic_json_v2_dti_api_and_tests.md).
@@ -544,27 +564,36 @@ Typical response fields:
 ## Testing
 
 The canonical laptop test is **one file**, `tests/test_ci_identifier_precedence.py`. Its
-historical filename is retained, but its default is now the complete declared Generic JSON V2
-API-and-BR manifest, not a CI-only check. It uses stock Python 3.9+ and imports no other project
+historical filename is retained, but it is not a CI-only check. It uses stock Python 3.9+ and imports no other project
 file. No Linux service, root account, scheduler, monitoring email, or required pip package is involved.
-The Python suite is version `1.2.0`, separate from runtime `2026.10.29.3`. Plan/report provenance
+The Python suite is version `1.3.0`, separate from runtime `2026.10.29.3`. Report provenance
 includes the executing file's module-load SHA-256 as well as the suite version.
 
-```bash
-cp tests/production_test.env.example production_test.env
-cp tests/production-fixtures.example.json target-fixtures.json
-python3 tests/test_ci_identifier_precedence.py --access-profile production --list-tests
-python3 tests/test_ci_identifier_precedence.py --access-profile production --plan
-python3 tests/test_ci_identifier_precedence.py --access-profile production --env-file production_test.env --fixture target-fixtures.json --report-file dti-report.json
-```
+1. Keep the updated script, `production_test.env`, and your already-filled `dev-fixtures.json`
+   together in the same private folder. Do not replace your filled files with the examples.
+2. Open Terminal or PowerShell in that folder and run:
 
-Fill both private copies with this target's actual values before a live invocation. The catalog
-contains all 14 production advanced families, invalid placeholder IDs, and nine source-fact
-attestations defaulted to false. Because this identity cannot read CMDB/user/property tables,
-the responsible data owner supplies existing reference values and verifies those prerequisites;
-the script does not request more permissions or provision fixtures. Configuration and populated
-field-read preflight stop before the first Event if complete prerequisites are unavailable.
-This is one Python program; the env and JSON catalog are configuration, not additional testers.
+   ```bash
+   python test_ci_identifier_precedence.py
+   ```
+
+   Use `python3` or `py -3` if that is your computer's Python command.
+3. Review the on-screen summary. A detailed `dti-results-....json` file is saved automatically
+   in the same folder.
+   Allow many minutes for actual processing and stability checks.
+
+With no arguments, the script reads only the files beside itself, not inherited shell credentials
+or files in another working directory. It uses a nonblank `USBEM_DEV_URL`, otherwise
+`SN_INSTANCE_URL`, from that env file and displays the selected target. It runs one target only;
+it never automatically advances through environments. Existing Basic/OAuth and plain/base64
+credential settings remain supported.
+
+Valid baseline CI, caller, required-field and assignment settings are required. Missing optional
+advanced fixture data no longer stops unrelated checks: each unavailable feature is reported
+INCOMPLETE, and all 85 manifest entries remain visible. Malformed JSON, unsafe baseline configuration
+or failed baseline controls stop safely with an actionable explanation. The existing catalog is
+configuration, not another test program. The script neither creates production fixtures nor
+requests CMDB/user/property access; independent expected references must still come from the owner.
 
 ### Production access profile
 
@@ -586,11 +615,11 @@ The non-Incident Task guard is excluded because its Task baseline cannot be read
 these boundaries; production completion is not the broader comprehensive-profile certification.
 Missing fixtures, required customer fields or field ACLs remain INCOMPLETE/nonzero.
 
-Use target-specific profiles one at a time: DEV, then IT, UAT and PROD after reviewing each report.
-Shared Basic usernames with per-profile passwords and existing per-profile OAuth credentials are
-supported; selected blank URLs fail before network and unselected blanks are ignored. Assignment
+Run only the intended target, reviewing its report before moving through the SDLC. The no-argument
+workflow does not inspect other configured URLs to choose a fallback target. Shared Basic usernames
+with per-profile passwords and existing per-profile OAuth credentials are supported. Assignment
 is configured by `USBEM_ASSIGNMENT_GROUP` and its exact expected ID, without code edits.
-See [the full production usage and commands](docs/production-test-usage.md).
+See [the three-step production usage guide](docs/production-test-usage.md).
 
 The run creates real retained test Incidents/Alerts. Normal platform notifications, email,
 outage rules and other Business Rules can fire; the script does not suppress them. Choose an
@@ -599,7 +628,8 @@ email notifier. Three parallel first events still exercise the accepted duplicat
 
 ### Broader comprehensive profile
 
-The remaining configuration/admin guidance describes the default `comprehensive` profile.
+The remaining configuration/admin guidance is advanced compatibility guidance for the broader
+`comprehensive` command-line profile, not the no-argument laptop workflow.
 Use it only with its separately required reference, journal and attachment access. Its ordinary
 env template is `tests/ci_identifier_test.env.example`; explicit DEV fixture administration is
 not available in production mode. Historical failed/incomplete administrative evidence is retained.

@@ -8,19 +8,38 @@ breadcrumb in `incident.correlation_id`, and returns promptly. The alert reconci
 links the later alert to that incident. Do not add a wait key to new callers; it is legacy
 compatibility only.
 
-Current test delivery is suite `1.2.0` / published article `1.6.0`: an explicit three-table
-`--access-profile production` mode plus private-fill env/catalog templates. It changes test
-assets/documentation only, not runtime `.3`, security or production data. Focused DEV validation
-under the enforced three-table request boundary is complete; matching DEV article/body/current
-attachment verification is complete, and no actual production identity is certified. The approved Salesforce correction is already deployed in DEV with six matched
-runtime sources and preserved BR configuration.
-Local validation: 416 Python + 234 JavaScript checks (650 total), including 102 production
+Current laptop delivery is suite `1.3.0` / published article `1.7.0`: put the updated script, existing
+`production_test.env`, and already-filled `dev-fixtures.json` together, then run
+`python test_ci_identifier_precedence.py` without flags or options. The script automatically
+selects the three-table production workflow, displays its one target, prints a readable summary
+and saves a uniquely named JSON report beside itself. Optional missing advanced data is explicitly INCOMPLETE,
+not a global baseline blocker or false PASS; all 85 entries remain in the report. Baseline
+configuration and controls still must be safe and valid. Offline validation of updated bytes
+passes 446 Python tests plus 234 JavaScript checks (680 total), including 30 new laptop-entry
+tests. Frozen suite 1.3.0 SHA-256:
+`c39760011c871a659ae40e2c5cc03ca592f4b702d93439d1acd01739298748ab`.
+Focused DEV invocation proof completed in 132.586 seconds: seven selected features/three CI cases,
+five PASS, zero failures/errors, two deliberate optional-feature SKIPs and correct INCOMPLETE/exit 4.
+Four connector POSTs and zero PATCHes verified CI controls/conflict/duplicate handling; missing
+custom-field/CAR checks sent no Events. Independent three-GET/zero-write readback verified four
+Processed Events, three Incidents, three Alerts, 21 required-field checks and unchanged expected
+fields/links. This used the actual no-argument path with private focused dispatch and an in-memory
+DEV connection; sidecar parsing was tested offline. It is not all-85 live acceptance or actual
+restricted production-identity proof. Matching article 1.7.0 is published and reader-verified,
+with exact source-body readback and actual script/configuration/usage links; see
+[one-command validation](validation-2026-10-29-one-command.md). Runtime `.3` and security are unchanged.
+
+Historical suite `1.2.0` / article `1.6.0` evidence below belongs only to its old exact bytes.
+Its explicit three-table production mode and matching DEV article/body/attachment verification
+were completed; no actual production identity is certified. The approved Salesforce correction
+is already deployed in DEV with six matched runtime sources and preserved BR configuration.
+Historical local validation: 416 Python + 234 JavaScript checks (650 total), including 102 production
 unit methods. The independent native-Alert model exercises all 85 actual callbacks with 84 PASS /
 1 accepted concurrency limitation: 102 modeled cases, 119 connector calls, 11 negative probes,
 24 formatted-note reads, three debug companions and five owned PATCH operations. This is not
-full live production proof. Frozen program SHA-256:
+full live production proof. Historical program SHA-256:
 `68db4a360ae112c223e327bc5a51f1f5bc2e77703353b42a96dc2d3bf4f5d280`.
-The exact-file focused DEV run completed 20 checks/33 cases in 725.494 seconds: 19 PASS,
+The historical suite 1.2.0 exact-file focused DEV run completed 20 checks/33 cases in 725.494 seconds: 19 PASS,
 one accepted concurrency limitation and zero failures/errors/skips. Maximum POST 1.137 seconds,
 minimum case stability 34.813 seconds, eight formatted-note observations and three debug companions.
 Three first concurrent requests created three Incidents under the accepted race. Independent
@@ -28,8 +47,8 @@ GET-only readback passed with three queries/zero writes: 45 Events all Processed
 three debug), 15 Incidents, 25 Alerts and 98 required-field checks; expected fields/links unchanged.
 See [the scoped validation report](validation-2026-10-29-production-access.md). This is not
 full 85-feature live acceptance or actual restricted production-account/corporate-endpoint proof.
-Knowledge article `1.6.0` is published, active, latest and reader-verified in the matching DEV PDI.
-Normalized body readback is exact; current program/configuration and evidence uploads pass authenticated API/reader byte checks,
+Knowledge article `1.6.0` was published and reader-verified in the matching DEV PDI.
+Its normalized body readback was exact; those historical program/configuration and evidence uploads pass authenticated API/reader byte checks,
 actual reader download links render, and anonymous requests do not return files.
 
 The separate provisioned administrative full retest remains incomplete, including the unapproved
@@ -91,30 +110,40 @@ restore the retired queued-event/Script Action linker.
 ## Standalone Python test and Knowledge
 
 - `tests/test_ci_identifier_precedence.py`: canonical on-demand Python 3.9+ API-and-BR tester.
-  The historical filename is retained. Use `--access-profile production` for the 85-feature
-  three-table production-observable manifest; the default `comprehensive` profile retains the
-  broader administrative-evidence requirements.
+  The historical filename is retained. Running without arguments selects the 85-entry
+  three-table production-observable workflow using `production_test.env` and `dev-fixtures.json`
+  beside the script, displaying one target and a readable summary, and saving unique JSON results automatically.
+  Advanced comprehensive CLI compatibility retains its broader administrative-evidence requirements.
   It imports no other project files and requires no packages, Linux service, root access,
   scheduler, or monitoring email configuration.
-  Suite version `1.2.0` is separate from runtime `2026.10.29.3`; plan/report provenance
+  Suite version `1.3.0` is separate from runtime `2026.10.29.3`; plan/report provenance
   includes the executing script's SHA-256 captured at module load.
   Explicit Basic-admin DEV fixture setup and temporary default-property control are additional
   opt-ins in that same file, unavailable in production mode and not restricted-account requirements.
 - `tests/production_test.env.example`: private-fill production URL/profile, Basic/OAuth,
   CI/required-field/assignment and timing template. A shared Basic username can use separate
-  profile passwords; explicit blank selected URLs fail before network and unselected blanks are ignored.
+  profile passwords. The laptop workflow reads the existing `production_test.env` beside the script,
+  choosing a nonblank `USBEM_DEV_URL`, otherwise that file's direct `SN_INSTANCE_URL`;
+  inherited process credentials and automatic multi-target fallback are not used.
 - `tests/production-fixtures.example.json`: complete-shaped configuration for all 14 production
   advanced families, exact expected target references and nine owner attestations. Invalid ID
-  placeholders and false attestations must be replaced/verified before any Event is submitted.
+  placeholders and unverified attestations leave dependent optional features INCOMPLETE, not PASS;
+  they do not prevent unrelated baseline checks. Preserve the user's already-filled `dev-fixtures.json`.
   This is configuration, not a second test program; no PDI values are portable.
-- `docs/production-test-usage.md`: production commands, target-data preparation, observable
+- `docs/production-test-usage.md`: three-step no-argument laptop instructions, observable
   coverage, rights boundary, retained records and notification/outage-rule warning.
+- `docs/validation-2026-10-29-one-command.md`: suite 1.3.0 exact-program provenance, 680 offline
+  checks and completed focused no-argument DEV invocation proof, with deliberate incomplete-fixture
+  behavior; not all-85 live or actual restricted production-identity acceptance.
 - `docs/validation-2026-10-29-production-access.md`: frozen-program provenance, offline/model
   validation, focused live DEV three-table evidence and independent readback, with explicit
   full-live/actual-production-account limitations. It does not replace administrative full evidence.
 - `tests/test_dti_production_runner.py`: 102 offline production-mode regression methods,
   including an independent native-Alert model invoking the complete 85-feature manifest.
   This repository regression asset is not a second laptop executable or a live production result.
+- `tests/test_dti_laptop_runner.py`: 30 offline regressions for the no-argument entry point,
+  script-relative configuration, isolated credentials, unique reports and partial-fixture handling.
+  This is a repository regression asset, not another script the laptop operator must run.
 - `docs/validation-2026-10-29-production-access.md`: sanitized suite 1.2.0 provenance,
   offline/model results, scoped live DEV validation, rights boundaries and attachment proof.
 - `tests/ci_identifier_test.env.example`: non-secret template for target URL, Basic or OAuth
@@ -141,11 +170,15 @@ restore the retired queued-event/Script Action linker.
 - `docs/validation-2026-10-29-provisioned-comprehensive.md`: new suite 1.1.0 setup/recovery and
   exact-file full-run evidence; currently PENDING. Prior report/raw outcomes remain unchanged.
 
-For production use `--access-profile production --list-tests` and the matching read-only `--plan`.
+For the laptop run, keep the existing three files together and run
+`python test_ci_identifier_precedence.py`; no flags are required. Advanced compatibility inspection
+still supports `--access-profile production --list-tests` and read-only `--plan`.
 Its transport and runner allow only connector POST, Event reads and owned Alert/Incident reads/PATCH.
 No reference-table reads, dot-walks, admin fallback, fixture setup, schema/property/security writes,
 direct Event writes, creates/deletes, background scripts or attachment downloads are permitted.
-Static full-catalog validation and populated required-field probes precede the first Event.
+Baseline configuration/control validation and populated required-field probes precede dependent
+claims. Unavailable optional catalog families are recorded INCOMPLETE without blocking unrelated
+checks; all 85 manifest entries remain in the report.
 Stored reference IDs still must match independent owner expectations. After fresh raw ownership
 verification, note sentinels use only the exact owned Incident/Alert's formatted visible
 `sys_id,work_notes` view. Blank/missing formatted views are incomplete even for negative checks;
@@ -288,15 +321,16 @@ The GitHub repository is public. Filled fixtures and full machine reports must n
 credential-free evidence can still expose target/record metadata. Retain detailed new evidence
 only in the selected PDI's Knowledge attachments and publish a reviewed sanitized summary.
 
-Current matching DEV article: KB0010015 on dev392825, sys_id
-`7433ede097d457105fb3ba6de053af9b`. Article 1.6.0 is published, active, latest and reader-verified,
-with attachments enabled and exact normalized body readback. Current program/configuration and evidence uploads pass exact-byte
-authenticated API/reader download verification, and anonymous downloads do not return files.
-Actual reader links render for the canonical program, production env/catalog and usage guide.
-Only the previous Python/common-env attachments were replaced, with local recovery copies retained;
-all historical reports remain intact. Article 1.4.0 is historical; 1.5.0 was not published.
-Suite 1.1.0's administrative provisioned full evidence remains incomplete. Sanitized public Git
-publication is authorized but not yet claimed complete. Full detailed
+Matching DEV article: KB0010015 on dev392825, sys_id
+`7433ede097d457105fb3ba6de053af9b`. Article 1.7.0 is published, active, latest and reader-verified,
+with attachments enabled and exact normalized source-body readback. The current canonical program
+and new focused evidence pass exact-byte authenticated API/reader download verification; anonymous
+downloads do not return files. Actual reader links render for the program, production env/catalog
+and usage guide. Previous script/usage copies are replaced with local recovery copies retained;
+all historical reports remain intact. Article 1.6.0 is historical suite 1.2.0 evidence; article
+1.4.0 is older historical evidence and 1.5.0 was not published. Suite 1.1.0's administrative
+provisioned full evidence remains incomplete. Historical sanitized Git milestone `6e7c1a5` is
+published; this suite 1.3.0 release contains reviewed sanitized source/summary. Full detailed
 reports and filled fixture data remain private. Do not treat older
 attachment hashes as proof of the updated bytes. The earlier dev382837
 KB0010025 is a separate historical copy and is not the documentation target for dev392825 work.

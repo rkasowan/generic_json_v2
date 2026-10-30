@@ -2,6 +2,42 @@
 
 All notable project updates should be recorded here when work is completed and pushed.
 
+## Python suite 1.3.0 / article 1.7.0 — one-command laptop test
+
+- make `python test_ci_identifier_precedence.py` the laptop entry point, with no required flags,
+  prompts, extra packages or second executable script
+- read the existing `production_test.env` and already-filled `dev-fixtures.json` beside the script;
+  use a nonblank DEV URL, otherwise the file's direct `SN_INSTANCE_URL`, for exactly one target;
+  do not inherit unrelated shell credentials or discover fallback targets
+- automatically select the restricted three-table production workflow, print a readable summary
+  and save a uniquely named JSON report beside the script; retain advanced developer CLI compatibility separately
+- retain all 85 manifest entries and honest INCOMPLETE reporting; missing/invalid optional advanced
+  fixture families no longer block unrelated checks, while unsafe baseline configuration/control
+  failures still stop safely and unavailable features never become PASS
+- keep runtime `2026.10.29.3`, access boundary, ownership guards, existing Basic/OAuth credential
+  support and native retained-ticket/notification effects unchanged; no new permission, service,
+  scheduler, email notifier, fixture provisioning or cleanup is introduced
+- freeze updated program SHA-256 `c39760011c871a659ae40e2c5cc03ca592f4b702d93439d1acd01739298748ab`;
+  pass 446 Python tests in 42.223 seconds plus 234 JavaScript checks (680 total), including 30
+  new laptop-entry tests; independent source review found no blocking runner defect
+- complete scoped DEV invocation proof on those exact bytes in 132.586 seconds: seven selected
+  features/three CI cases, five PASS and two deliberately missing optional-feature SKIPs, zero
+  failures/errors, correctly INCOMPLETE/exit 4; unrelated CI/duplicate checks continue and unavailable
+  custom-field/CAR checks send no Events; four connector POSTs, zero PATCHes, max POST 0.870 seconds,
+  minimum stability 30.011 seconds
+- independently verify retained effects with three fresh GETs/zero writes: four Processed Events,
+  three Incidents, three Alerts, 21 required-field checks and unchanged expected fields/links
+- qualify live evidence: actual no-argument path with private focused dispatch and in-memory DEV
+  connection, offline sidecar-parsing proof, not all-85 live or actual restricted production identity;
+  preserve the initial private harness-only JSON-set serialization failure without altering source
+- publish article 1.7.0 on matching dev392825 and verify published/active/latest/visible-attachment
+  flags, exact source-body readback and actual reader script/configuration/usage links; byte-verify
+  canonical program and focused evidence through authenticated API/reader downloads, with anonymous
+  downloads blocked; replace previous script/usage copies recoverably and preserve historical reports
+- deliver reviewed sanitized source/summary in this release; see
+  `validation-2026-10-29-one-command.md`; suite 1.2.0's 650 offline checks and 725.494-second focused live run
+  remain historical evidence for their exact old hash, not verification of suite 1.3.0
+
 ## Python suite 1.2.0 / article 1.6.0 — restricted production functional test
 
 - add explicit `--access-profile production` in the same standalone Python program for existing

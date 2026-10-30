@@ -668,7 +668,7 @@ class FixtureCliTests(unittest.TestCase):
 
     def test_normal_run_never_constructs_admin_or_provisioner_even_when_features_are_incomplete(self):
         output = io.StringIO()
-        with patch.dict(os.environ, {}, clear=True), patch.object(sys, "argv", ["tester"]), \
+        with patch.dict(os.environ, {}, clear=True), patch.object(sys, "argv", ["tester", "--access-profile", "comprehensive"]), \
                 patch.object(runner, "read_env", return_value=self.values()), patch.object(runner, "Client"), \
                 patch.object(runner, "ComprehensiveRunner") as suite, patch.object(runner, "DevAdminSession") as admin, \
                 patch.object(runner, "DevFixtureProvisioner") as setup, contextlib.redirect_stdout(output):

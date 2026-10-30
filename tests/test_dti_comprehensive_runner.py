@@ -1911,10 +1911,10 @@ class ComprehensiveCLITests(unittest.TestCase):
                 client.assert_not_called()
                 configuration.assert_not_called()
 
-    def test_default_cli_uses_comprehensive_runner_not_legacy_focused_suite(self):
+    def test_explicit_comprehensive_cli_uses_complete_runner_not_legacy_focused_suite(self):
         for status, exit_code in (("pass", 0), ("complete_with_known_limitations", 0), ("incomplete", 4),
                                   ("fail", 2), ("error", 3)):
-            with self.subTest(status=status), patch.object(sys, "argv", ["dti-tester"]), \
+            with self.subTest(status=status), patch.object(sys, "argv", ["dti-tester", "--access-profile", "comprehensive"]), \
                     patch.dict(runner.os.environ, {}, clear=True), \
                     patch.object(runner, "read_env", return_value={}), \
                     patch.object(runner, "configuration", return_value=("https://example.service-now.com", {"mode": "basic"}, object())), \

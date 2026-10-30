@@ -1,29 +1,28 @@
-# Restricted production acceptance
+# Run the DTI test
 
-On POSIX systems generated output files use mode 0600. On Windows, keep credentials, catalogs and reports in a user-only NTFS folder; POSIX mode bits cannot set Windows ACL privacy. Atomic output still works when Python does not expose `os.fchmod`.
+Python suite 1.3.0 runs without flags or options. Use Python 3.9 or newer; no packages need installing.
 
-Suite 1.2.0 of the same standalone `test_ci_identifier_precedence.py` has an explicit `--access-profile production` mode; runtime 2026.10.29.3 is unchanged. It exercises the connector and its actual Event → Alert → Incident outcomes using only the existing connector POST plus Event read, Alert read/write, and Incident read/write. It never switches to an admin identity or requests extra table access.
+1. Put the updated `test_ci_identifier_precedence.py`, `production_test.env`, and your already-filled `dev-fixtures.json` together in one private folder. Keep your filled files; do not replace them with the example templates.
+2. Open Terminal or PowerShell in that folder and run:
 
-Use the attached `production_test.env.example` and full-shaped `production-fixtures.example.json` as private configuration templates. Replace every `REPLACE_WITH_...` token with this target's real value; repeated tokens identify the same object. The JSON intentionally contains invalid IDs and false attestations, so it is not a ready-to-run catalog. The current identity cannot discover those reference facts from CMDB/user/property tables: have the responsible owner supply existing target values, then affirm each verified source fact. No additional permission is requested, and no production fixture is provisioned. The catalog is data, not another test program.
+   ```bash
+   python test_ci_identifier_precedence.py
+   ```
 
-Python 3.9 or newer is sufficient; there are no third-party package dependencies. A normal run creates real retained test Incidents/Alerts and may trigger normal notifications/email, outage rules and other Business Rules; those native effects are not suppressed. Agree on test CIs, caller, assignment group, and a testing window before running. The configurable assignment group is `USBEM_ASSIGNMENT_GROUP`, with the independently known `USBEM_EXPECTED_ASSIGNMENT_GROUP_SYS_ID` as the stored-value expectation. Complete static-catalog validation and populated required-field probes must pass before the first test Event.
+   If your computer calls Python `python3` or `py -3`, use that command instead.
+3. Read the final on-screen summary. The detailed `dti-results-....json` file is saved automatically in that folder. Allow many minutes; the test waits for actual Event processing, Alert links and stable results.
 
-Inspect the plan without credentials or network access:
+There is no command-line configuration to assemble. The test reads only the two files beside the script, not another working directory's files or inherited shell credentials. It uses the nonblank `USBEM_DEV_URL` from `production_test.env`, otherwise its `SN_INSTANCE_URL`, and displays the one selected target. It never advances automatically to IT, UAT or PROD. Existing plain/base64 Basic credentials and OAuth settings still work; base64 is reversible encoding, not hashing or encryption. Assignment uses the existing `USBEM_ASSIGNMENT_GROUP` and expected group ID settings, without editing Python.
 
-```bash
-python3 test_ci_identifier_precedence.py --access-profile production --plan
-```
+Baseline CI, caller, required-field and assignment settings must be valid. Missing optional advanced fixture data no longer prevents the ordinary checks from running: all 85 manifest entries remain in the report, and unavailable features are explicitly INCOMPLETE, not PASS. Fix the named data when you need complete acceptance; do not change owner attestations to true without verifying them. Malformed JSON, unsafe baseline configuration or failed baseline controls stop safely with an actionable explanation.
 
-Configure one target directly, or reuse the existing environment profile pattern. Each invocation selects exactly one target; an explicitly selected blank URL stops before network access. Blank, unselected environment URLs are ignored. A shared Basic username can be combined with a different password for each profile; existing per-profile OAuth client credentials also work. Base64 is reversible encoding, not hashing or encryption.
+The run creates real retained test Incidents/Alerts and can trigger normal notifications/email, outage rules and other Business Rules. Use approved test CIs, caller, assignment group and testing window. No service, root access, scheduler or separate email notifier is installed.
 
-```bash
-python3 test_ci_identifier_precedence.py --access-profile production --env-file production_test.env --profile DEV --fixture dev-fixtures.json --report-file dev-report.json
-python3 test_ci_identifier_precedence.py --access-profile production --env-file production_test.env --profile IT --fixture it-fixtures.json --report-file it-report.json
-python3 test_ci_identifier_precedence.py --access-profile production --env-file production_test.env --profile UAT --fixture uat-fixtures.json --report-file uat-report.json
-python3 test_ci_identifier_precedence.py --access-profile production --env-file production_test.env --profile PROD --fixture prod-fixtures.json --report-file prod-report.json
-```
+Keep configuration and results private. On POSIX systems generated outputs use mode 0600; on Windows use a user-only NTFS folder because POSIX mode bits cannot set Windows ACL privacy. Do not put credentials in shell arguments or copy one target's record IDs into another target's fixtures.
 
-Run the next command only after reviewing the previous target's report. These are four separate acceptance runs, not a scheduler or automatic multi-instance rollout. All filled environment files, catalogs, journals and detailed reports must remain private. Do not put credentials in shell arguments or copy PDI record IDs to another target.
+Suite 1.3.0 changes only the laptop entry point, fixture handling and reporting; runtime 2026.10.29.3 is unchanged. It still uses only existing connector POST plus Event read, Alert read/write and Incident read/write, with no administrator fallback. Advanced developer flags remain supported for compatibility but are unnecessary for this laptop workflow. Updated-version offline validation passes 446 Python plus 234 JavaScript checks (680 total), including 30 new laptop-entry tests. Program SHA-256: `c39760011c871a659ae40e2c5cc03ca592f4b702d93439d1acd01739298748ab`.
+
+Focused DEV invocation proof completed in 132.586 seconds: five checks passed and two intentionally unavailable optional features were skipped, correctly returning INCOMPLETE/exit 4 while unrelated CI/duplicate checks continued. Fresh GET-only readback verified four Processed Events, three Incidents, three Alerts and 21 required-field checks. This exercised the actual no-argument path through a private focused dispatch with the DEV connection injected in memory; sidecar parsing was tested offline. It is not all-85 live acceptance or actual restricted production-identity proof. Article 1.7.0 is published and reader-verified in matching dev392825, with exact source-body readback and actual script/configuration/usage links. The canonical program and focused evidence pass authenticated API/reader byte checks; anonymous downloads are blocked. Previous script/usage attachments are replaced recoverably, and historical reports remain. See [one-command validation](validation-2026-10-29-one-command.md); suite 1.2.0 evidence remains historical, not verification of these updated bytes.
 
 ## Coverage and exact evidence boundary
 
@@ -47,7 +46,7 @@ Production mode does not read CMDB, users, groups, properties, dictionary, journ
 
 The template's `severity_map` is the release's default mapping, not an assertion that your target has unchanged property overrides. Confirm it, the literal stored default category/subcategory values, duplicate-note policy, valid closure choice, and the Alert Closed state. `terminal_extra_fields` may be empty or contain only a nonempty `u_cause` string if the target requires that field. Replace the custom-field placeholder in both the payload and expected result with an existing approved Incident field. An offering-positive service and a different, valid negative-control service are both required. The CI-support group must differ from the explicitly supplied baseline test group so the override test proves real precedence.
 
-Production `expected_incident` / `expected_event` values must be stored-value strings, including `"0"`, `"false"` and `""`, not interchangeable JSON numbers, booleans or null. User `additional_info` expectations preserve native JSON types and use type-strict recursive comparison. Malformed catalogs stop preflight before Event writes; malformed raw stored response types do not pass through truthy/falsy coercion.
+Production `expected_incident` / `expected_event` values must be stored-value strings, including `"0"`, `"false"` and `""`, not interchangeable JSON numbers, booleans or null. User `additional_info` expectations preserve native JSON types and use type-strict recursive comparison. Invalid optional fixture families are reported incomplete rather than blocking unrelated tests; malformed JSON or unsafe baseline configuration stops before Event writes. Malformed raw stored response types do not pass through truthy/falsy coercion.
 
 Native OK/severity 5 can create an Alert; Clear/severity 0 instead closes matching Alerts and creates no fresh Alert. See [ServiceNow: View alert information](https://www.servicenow.com/docs/r/it-operations-management/event-management/t_EMViewAlert.html). The connector suppresses an automatic DTI Incident for severity 5, not its native Alert. Fresh Clear/Closing cases expect no Alert, and the production tests distinguish these outcomes.
 

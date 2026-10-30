@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """One standalone, standard-library Generic JSON V2 / fast-DTI release tester.
 
-The default CLI runs the complete declared feature manifest, including Event processing,
-Alert/Incident reconciliation, journals, debug downloads, negatives, routing and lifecycle.
-Use --list-tests or --plan without credentials to inspect the contract before writing data.
-Additional reference fixtures are supplied in --fixture JSON (or USBEM_TEST_FIXTURES_JSON).
-Missing fixtures or read permissions produce INCOMPLETE, never a passing release sign-off.
-Use --access-profile production for a transport-enforced three-table functional test:
+Run this file without arguments. It reads production_test.env and dev-fixtures.json beside
+the script, uses the production-safe three-table test, and saves dti-results-*.json there.
+It runs available checks and reports missing optional prerequisites as INCOMPLETE, never PASS.
+The compatibility command-line interface remains available for existing automation.
+The production-safe test permits only:
 connector POST, Event read, and owned Alert/Incident read/write. It does not read reference,
 journal, attachment, schema or security tables; those evidence limits are explicit in its report.
 All test records are retained. Normal testing uses no service, email, schema/security changes,
@@ -21,12 +20,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import http.client
 import http.cookiejar
 import hashlib
 import html
+import io
 from html.parser import HTMLParser
 import json
 import math
@@ -44,7 +45,7 @@ import urllib.request
 import uuid
 
 EXPECTED_RELEASE = "2026.10.29.3"
-TEST_SUITE_VERSION = "1.2.0"
+TEST_SUITE_VERSION = "1.3.0"
 try:
     SCRIPT_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 except OSError:
@@ -92,7 +93,7 @@ def read_env(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise ValueError("environment file does not exist; copy the supplied template first")
     values = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
         if "=" not in raw or raw.lstrip().startswith("#"):
             continue
         key, value = raw.split("=", 1)
@@ -3579,7 +3580,255 @@ class ProductionRunner(ComprehensiveRunner):
         return result
 
 
-def configuration(args, values: dict, *, connection_only=False):
+class LaptopProductionRunner(ProductionRunner):
+    """Run the useful core now; report unavailable optional coverage honestly.
+
+    This is the no-argument laptop entry point's production runner. The explicit
+    production CLI retains its strict, all-inputs-before-writes preflight. Both
+    paths use the same 85 callbacks and independently guarded HTTP transport.
+    """
+    INCIDENT_FIELDS = ",".join(field for field in ProductionRunner.INCIDENT_FIELDS.split(",")
+                               if field not in {"assigned_to", "business_service", "service_offering", "work_notes"})
+    ALERT_FIELDS = ",".join(field for field in ProductionRunner.ALERT_FIELDS.split(",") if field != "work_notes")
+    EVIDENCE_BOUNDARIES = ProductionRunner.EVIDENCE_BOUNDARIES + (
+        "The laptop run continues through available features when optional fixtures or readable fields are missing; any skipped feature makes the aggregate INCOMPLETE, never PASS.",
+    )
+    EVIDENCE_LIMITS = EVIDENCE_BOUNDARIES
+    FIXTURE_IDS = frozenset(("assignee_sys_id", "default_caller_sys_id", "ci_support_sys_id",
+                             "ci_support_group_sys_id", "service_sys_id", "offering_sys_id", "default_ci_sys_id"))
+    FEATURE_FIELDS = {
+        "caller_assignee_sysid": {"incident": {"assigned_to"}},
+        "caller_assignee_name": {"incident": {"assigned_to"}},
+        "invalid_user_fallback": {"incident": {"assigned_to"}},
+        "service_sysid": {"incident": {"business_service"}},
+        "service_name": {"incident": {"business_service"}},
+        "offering_sysid": {"incident": {"service_offering"}},
+        "offering_name": {"incident": {"service_offering"}},
+        "scalar_passthrough_and_reserved_fields": {"incident": {"contact_type", "location", "watch_list"}},
+        "incident_alert_notes": {"incident": {"work_notes"}, "em_alert": {"work_notes"}},
+        "plain_alert_notes": {"em_alert": {"work_notes"}},
+        "default_and_duplicate_notes": {"incident": {"work_notes"}},
+        "dti_aliases": {"incident": {"work_notes"}},
+        "foreign_incident_guard": {"incident": {"work_notes"}, "em_alert": {"work_notes"}},
+        "generating_alert_reference": {"incident": {"u_generating_alert"}},
+        "netcool_ticket_default": {"incident": {"u_netcool_ticket"}},
+    }
+
+    def __init__(self, client, settings: Settings, fixtures: dict | None = None,
+                 monotonic=time.monotonic, sleep=time.sleep):
+        self.terminal_prerequisite_error = ""
+        # Closure-only input is never a reason to prevent safe CI/core tests.
+        # Remove invalid extras from the internal copy and gate all terminal
+        # callbacks instead; do not mutate the user's catalog or send a fallback.
+        safe_fixtures = fixtures
+        if isinstance(fixtures, dict):
+            extra = fixtures.get("terminal_extra_fields", {})
+            if (not isinstance(extra, dict) or set(extra) - {"u_cause"} or
+                    any(not isinstance(value, str) or not value.strip() for value in extra.values())):
+                safe_fixtures = dict(fixtures)
+                safe_fixtures.pop("terminal_extra_fields", None)
+                self.terminal_prerequisite_error = "terminal_extra_fields may contain only a non-empty string u_cause; terminal checks were not run"
+        super().__init__(client, settings, safe_fixtures, monotonic, sleep)
+        self.readable_fields = {table: set() for table in self.READ_TABLES}
+        self.optional_field_probes = []
+
+    @staticmethod
+    def reject_placeholders(value):
+        if isinstance(value, str):
+            normalized = re.sub(r"[-\s]+", "_", value.strip().upper())
+            if ("REPLACE_WITH" in normalized or "CHANGE_ME" in normalized or
+                    normalized.startswith(("YOUR_", "<YOUR", "<REPLACE"))):
+                raise MissingFixture("a fixture still contains a template placeholder; fill it in to enable this check")
+        elif isinstance(value, dict):
+            for key, member in value.items():
+                LaptopProductionRunner.reject_placeholders(key)
+                LaptopProductionRunner.reject_placeholders(member)
+        elif isinstance(value, list):
+            for member in value:
+                LaptopProductionRunner.reject_placeholders(member)
+
+    def validate_laptop_baseline(self):
+        self.check_group_fixture()
+        for name in ("caller_id", "expected_id", "decoy_id", "expected_assignment_group_id"):
+            if not isinstance(getattr(self.settings, name), str) or not SYS_ID.fullmatch(getattr(self.settings, name)):
+                raise MissingFixture("the core test requires a valid " + name + " before sending any Event")
+        if self.settings.expected_id == self.settings.decoy_id:
+            raise MissingFixture("the core test needs two different CI sys_ids to prove identifier precedence")
+        for name in ("source", "ci_type", "decoy_name", "assignment_group", "category", "subcategory", "expected_release",
+                     "expected_category", "expected_subcategory", "impact", "urgency"):
+            value = getattr(self.settings, name)
+            if not isinstance(value, str) or not value.strip():
+                raise MissingFixture("the core test requires a non-empty " + name)
+            self.literal(value)
+            self.reject_placeholders(value)
+        if not IDENTIFIER_KEY.fullmatch(self.settings.ci_type):
+            raise MissingFixture("the core CI type must be a technical class name")
+        identifier = self.settings.identifier
+        if (not isinstance(identifier, dict) or not identifier or any(
+                not isinstance(key, str) or not IDENTIFIER_KEY.fullmatch(key) or
+                isinstance(value, bool) or not isinstance(value, (str, int, float)) or not str(value).strip() or
+                isinstance(value, float) and not math.isfinite(value) for key, value in identifier.items())):
+            raise MissingFixture("the core test requires a non-empty CI identifier object with valid scalar fields")
+        for value in identifier.values():
+            self.literal(value)
+            self.reject_placeholders(value)
+        if self.settings.impact not in ("1", "2", "3", "4") or self.settings.urgency not in ("1", "2", "3", "4"):
+            raise MissingFixture("core impact and urgency must be stored numeric choice values 1 through 4")
+
+    def probe_read_fields(self, table, fields):
+        requested = set(fields) | {"sys_id"}
+        if table not in self.READ_TABLES or any(not isinstance(field, str) or not IDENTIFIER_KEY.fullmatch(field) for field in requested):
+            raise MissingFixture("field evidence must use direct fields on the three permitted tables")
+        fields = ",".join(sorted(requested))
+        params = {"sysparm_query": "sys_idISNOTEMPTY^ORDERBYDESCsys_created_on", "sysparm_fields": fields,
+                  "sysparm_limit": "1", "sysparm_display_value": "false", "sysparm_exclude_reference_link": "true"}
+        rows = self.client.request("GET", "/api/now/table/" + table + "?" + urllib.parse.urlencode(params),
+                                   timeout=self.settings.request_timeout)
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ApiError(table + " populated field-read probe returned an invalid response shape")
+        if len(rows) != 1:
+            raise MissingFixture(table + " needs one visible populated row to check these fields before test writes")
+        missing = requested - set(rows[0])
+        if missing:
+            raise MissingFixture(table + " fields absent or unreadable: " + ", ".join(sorted(missing)) + "; only checks requiring them are unavailable")
+        if any(not isinstance(rows[0][field], str) for field in requested):
+            raise ApiError(table + " field-read probe returned non-string raw stored values")
+        if not SYS_ID.fullmatch(rows[0]["sys_id"]):
+            raise CheckFailed(table + " populated field-read probe returned an invalid record identity")
+        self.readable_fields[table].update(requested)
+        return {"table": table, "populated_field_read": True, "fields": sorted(requested)}
+
+    def preflight(self):
+        self.validate_laptop_baseline()
+        checked = [self.probe_read_fields(table, fields.split(",")) for table, fields in (
+            ("em_event", self.EVENT_FIELDS), ("em_alert", self.ALERT_FIELDS), ("incident", self.INCIDENT_FIELDS))]
+        return {"readable_tables": checked, "schema_or_reference_reads": 0, "partial_fixture_mode": True,
+                "qualification": "Core inputs and populated field reads checked before writes. Each optional feature separately validates its own fixtures and fields before it can send an Event."}
+
+    def validate_optional_advanced(self, name):
+        advanced = self.fixtures.get("advanced_cases", {})
+        fixture = advanced.get(name) if isinstance(advanced, dict) else None
+        if fixture is None:
+            raise MissingFixture("advanced_cases." + name + " is missing; other available checks will still run")
+        self.reject_placeholders(fixture)
+        if name in ("offering_parent_filter", "default_dummy_policy") and (
+                not isinstance(fixture, list) or len(fixture) < (2 if name == "offering_parent_filter" else 3)):
+            raise MissingFixture(name + " needs its complete positive/negative control collection")
+        members = fixture if isinstance(fixture, list) else [fixture]
+        if not members:
+            raise MissingFixture(name + " advanced control collection is empty")
+        fields = {"incident": set(), "em_event": set()}
+        for index, member in enumerate(members):
+            if not isinstance(member, dict):
+                raise MissingFixture(name + " advanced controls must be objects")
+            remove = member.get("remove_fields", [])
+            info, absent = member.get("expected_additional_info", {}), member.get("absent_additional_info", [])
+            if not isinstance(remove, list) or any(not isinstance(field, str) or not IDENTIFIER_KEY.fullmatch(field) for field in remove):
+                raise MissingFixture(name + " remove_fields must contain technical field names")
+            if not isinstance(info, dict) or any(not isinstance(key, str) or not key for key in info):
+                raise MissingFixture(name + " expected_additional_info must be an object with non-empty string keys")
+            if not isinstance(absent, list) or any(not isinstance(key, str) or not key for key in absent):
+                raise MissingFixture(name + " absent_additional_info must contain non-empty string keys")
+            payload = self.advanced_payload(name, member, index)
+            json.dumps({"payload": payload, "expected_additional_info": info}, allow_nan=False)
+            if any(not isinstance(member.get(flag, True), bool) for flag in ("want_incident", "want_alert")):
+                raise MissingFixture(name + " fixture outcomes must be JSON booleans")
+            if name != "default_dummy_policy" and member.get("want_incident", True) is not True:
+                raise MissingFixture(name + " cannot disable its Incident proof")
+            expected_event, expected_incident = member.get("expected_event", {}), member["expected_incident"]
+            for table, expectations in (("em_event", expected_event), ("incident", expected_incident)):
+                if not isinstance(expectations, dict) or any(not isinstance(field, str) or not IDENTIFIER_KEY.fullmatch(field) or
+                        not isinstance(value, str) for field, value in expectations.items()):
+                    raise MissingFixture(name + " expected stored fields must be direct technical names with string values")
+                fields[table].update(expectations)
+            complete = self.expected(payload, **expected_incident)
+            if any(not isinstance(value, str) for value in complete.values()):
+                raise MissingFixture(name + " complete Incident expectations must be raw stored-value strings")
+            if member.get("want_incident", True) and any(not complete[field].strip() for field in (
+                    "caller_id", "category", "subcategory", "impact", "urgency", "short_description", "description")):
+                raise MissingFixture(name + " must expect all seven required Incident fields")
+            for field, value in expected_incident.items():
+                if field in ("cmdb_ci", "assignment_group", "assigned_to", "caller_id", "business_service", "service_offering") and value and not SYS_ID.fullmatch(value):
+                    raise MissingFixture(name + " expected references must be exact sys_ids or explicit blanks")
+            if expected_event.get("cmdb_ci") and not SYS_ID.fullmatch(expected_event["cmdb_ci"]):
+                raise MissingFixture(name + " expected Event CI must be an exact sys_id or explicit blank")
+            self.validate_advanced_fixture(name, payload, member)
+        if isinstance(fixture, list):
+            self.validate_advanced_controls(name, fixture)
+        return fields
+
+    def validate_feature_inputs(self, name, required=()):
+        # The Salesforce callback also uses these near its end. Validate them
+        # before its first subcase, so a partial catalog cannot emit placeholders.
+        if name == "salesforce_peru":
+            required = tuple(required) + ("offering_name", "offering_sys_id")
+        self.require(*required)
+        for key in required:
+            value = self.fixtures[key]
+            self.reject_placeholders(value)
+            if not isinstance(value, str) or not value.strip():
+                raise MissingFixture(key + " must be a non-empty target-specific string")
+            self.literal(value)
+            if key in self.FIXTURE_IDS and not SYS_ID.fullmatch(value):
+                raise MissingFixture(key + " must be an exact target-specific sys_id")
+        fields = {table: set(values) for table, values in self.FEATURE_FIELDS.get(name, {}).items()}
+        if name in {"wrapped_" + wrapper for wrapper in PAYLOAD_WRAPPERS}:
+            fields["incident"] = {"work_notes"}
+        if name in ADVANCED_FEATURES:
+            fields = self.validate_optional_advanced(name)
+        if name in ("ci_support_group", "explicit_group_override"):
+            self.attest("ci_support_group")
+            if self.fixtures["ci_support_group_sys_id"] == self.settings.expected_assignment_group_id:
+                raise MissingFixture("CI support routing controls need a support group different from the explicit assignment group")
+        if name.startswith("severity_"):
+            mapping = self.fixtures.get("severity_map", {"1": ["2", "2"], "2": ["2", "2"], "3": ["3", "3"], "4": ["4", "4"]})
+            severity = name.removeprefix("severity_")
+            pair = mapping.get(severity, ["", ""]) if isinstance(mapping, dict) else None
+            if (not isinstance(pair, (list, tuple)) or len(pair) != 2 or any(not isinstance(value, str) for value in pair) or
+                    severity in ("1", "2", "3", "4") and any(not value.strip() for value in pair)):
+                raise MissingFixture(name + " needs an explicit stored impact/urgency pair in severity_map")
+            self.reject_placeholders(pair)
+        if name == "default_and_duplicate_notes" and not isinstance(self.fixtures.get("duplicate_work_note_enabled", True), bool):
+            raise MissingFixture("duplicate_work_note_enabled must be a JSON boolean")
+        if name.startswith("terminal_"):
+            if self.terminal_prerequisite_error:
+                raise MissingFixture(self.terminal_prerequisite_error)
+            close_code = self.fixtures.get("terminal_close_code", "Solution provided")
+            if not isinstance(close_code, str) or not close_code.strip():
+                raise MissingFixture("terminal_close_code must be a non-empty stored-value string")
+            self.reject_placeholders(close_code)
+            self.reject_placeholders(self.fixtures.get("terminal_extra_fields", {}))
+            fields["incident"] = {"state", "close_code", "close_notes"} | set(self.fixtures.get("terminal_extra_fields", {}))
+        if name == "closed_alert_guard":
+            state = self.fixtures.get("alert_closed_state", "Closed")
+            if not isinstance(state, str) or not state.strip():
+                raise MissingFixture("alert_closed_state must be a non-empty stored-value string")
+            self.reject_placeholders(state)
+        return fields
+
+    def run_feature(self, name, callback, required=()):
+        def checked_callback():
+            if name not in ("read_preflight", "final_evidence_integrity"):
+                try:
+                    fields = self.validate_feature_inputs(name, required)
+                except (ValueError, TypeError, KeyError, IndexError):
+                    raise MissingFixture(name + " optional fixture is invalid; correct that feature's fixture to enable its check") from None
+                for table, wanted in fields.items():
+                    missing = wanted - self.readable_fields[table]
+                    if missing:
+                        self.optional_field_probes.append(self.probe_read_fields(table, missing))
+            return callback()
+        return super().run_feature(name, checked_callback, required)
+
+    def run(self, progress=None):
+        result = super().run(progress)
+        result["laptop_partial_fixture_mode"] = True
+        result["optional_field_probes"] = self.optional_field_probes
+        return result
+
+
+def configuration(args, values: dict, *, connection_only=False, environment=None):
+    environment = os.environ if environment is None else environment
     slug = re.sub(r"[^A-Za-z0-9]", "", args.profile).upper()
     if args.profile and not slug:
         raise ValueError("--profile must contain at least one ASCII letter or digit")
@@ -3587,8 +3836,8 @@ def configuration(args, values: dict, *, connection_only=False):
     def get(key: str, default: str = "") -> str:
         keys = (["USBEM_" + slug + "_" + key.removeprefix("USBEM_")] if slug and key.startswith("USBEM_") else []) + [key]
         for candidate in keys:
-            if os.environ.get(candidate, ""):
-                return os.environ[candidate]
+            if environment.get(candidate, ""):
+                return environment[candidate]
             if values.get(candidate, ""):
                 return values[candidate]
         return default
@@ -3599,8 +3848,8 @@ def configuration(args, values: dict, *, connection_only=False):
         keys = (["USBEM_" + slug + "_" + key.removeprefix("USBEM_")]
                 if slug and key.startswith("USBEM_") else []) + [key]
         for candidate in keys:
-            plain = os.environ.get(candidate, "") or values.get(candidate, "")
-            encoded = os.environ.get(candidate + "_B64", "") or values.get(candidate + "_B64", "")
+            plain = environment.get(candidate, "") or values.get(candidate, "")
+            encoded = environment.get(candidate + "_B64", "") or values.get(candidate + "_B64", "")
             if plain:
                 return plain
             if encoded:
@@ -3615,7 +3864,7 @@ def configuration(args, values: dict, *, connection_only=False):
         # Treat an explicitly blank process value as disabled, not as permission to
         # fall back to either the env file or an unrelated global URL.
         profile_url_key = "USBEM_" + slug + "_URL"
-        profile_url = os.environ[profile_url_key] if profile_url_key in os.environ else values.get(profile_url_key, "")
+        profile_url = environment[profile_url_key] if profile_url_key in environment else values.get(profile_url_key, "")
         if not isinstance(profile_url, str) or not profile_url.strip():
             raise ValueError("selected --profile requires non-empty " + profile_url_key + "; no global URL fallback is allowed")
         raw_instance = profile_url
@@ -3707,14 +3956,15 @@ def configuration(args, values: dict, *, connection_only=False):
     return instance, auth, settings
 
 
-def fixture_input(args, values):
+def fixture_input(args, values, *, environment=None):
+    environment = os.environ if environment is None else environment
     if args.fixture:
-        return Path(args.fixture).expanduser().read_text(encoding="utf-8")
+        return Path(args.fixture).expanduser().read_text(encoding="utf-8-sig")
     slug = re.sub(r"[^A-Za-z0-9]", "", args.profile).upper()
     keys = (["USBEM_" + slug + "_TEST_FIXTURES_JSON"] if slug else []) + ["USBEM_TEST_FIXTURES_JSON"]
     for key in keys:
-        if os.environ.get(key, ""):
-            return os.environ[key]
+        if environment.get(key, ""):
+            return environment[key]
         if values.get(key, ""):
             return values[key]
     return "{}"
@@ -3745,7 +3995,89 @@ def validate_fixture_output(path, instance):
         validate_catalog_metadata(existing, instance)
 
 
-def main() -> int:
+def run_laptop() -> int:
+    """One-command entry point; never select connections from process defaults."""
+    folder = Path(__file__).resolve().parent
+    env_path = folder / "production_test.env"
+    fixture_path = folder / "dev-fixtures.json"
+    # Accept the spelling used in the original support exchange without asking
+    # the operator to rename an already completed file. The canonical name wins.
+    if not fixture_path.is_file() and (folder / "dev-fixutres.json").is_file():
+        fixture_path = folder / "dev-fixutres.json"
+    report_path = folder / ("dti-results-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) +
+                            "-" + uuid.uuid4().hex[:8] + ".json")
+    try:
+        if not env_path.is_file():
+            raise ValueError("Put your completed production_test.env in the same folder as this Python script.")
+        if not fixture_path.is_file():
+            raise ValueError("Put your completed dev-fixtures.json in the same folder as this Python script.")
+        values = read_env(env_path)
+        try:
+            fixtures = json.loads(fixture_path.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"Fix JSON syntax in {fixture_path.name}, line {error.lineno}, column {error.colno}.") from None
+        if not isinstance(fixtures, dict):
+            raise ValueError(f"{fixture_path.name} must contain one JSON object.")
+        profile = "DEV" if values.get("USBEM_DEV_URL", "").strip() else ""
+        instance = validate_instance(values.get("USBEM_DEV_URL" if profile else "SN_INSTANCE_URL", ""))
+        if ("replace-with" in instance.casefold() or "replace_with" in instance.casefold() or
+                urllib.parse.urlsplit(instance).hostname.casefold().startswith(("your-", "your_"))):
+            raise ValueError("Set USBEM_DEV_URL or SN_INSTANCE_URL to your real instance in production_test.env.")
+        write_private_json(report_path, {"status": "running", "access_profile": "production",
+            "mode": "one_command_laptop", "instance": instance, "test_suite_version": TEST_SUITE_VERSION,
+            "script_sha256": SCRIPT_SHA256,
+            "qualification": "A running/interrupted report is not a passing result. Retained test records may exist."})
+    except (ValueError, OSError, UnicodeError) as error:
+        message = str(error) if isinstance(error, ValueError) and not isinstance(error, UnicodeError) else "Could not read the configuration files or create the results file. Use a writable private folder."
+        print("SETUP NEEDED: " + message)
+        print("No test Events were sent.")
+        return 3
+    print("DTI API test — production-safe mode")
+    print("Instance: " + instance)
+    print("Using: " + env_path.name + " and " + fixture_path.name)
+    print("This run creates retained test Incidents/Alerts; normal platform notifications can run.")
+    arguments = ["--access-profile", "production", "--env-file", str(env_path),
+                 "--fixture", str(fixture_path), "--report-file", str(report_path)]
+    if profile:
+        arguments.extend(("--profile", profile))
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(captured):
+            code = main(arguments, laptop=True)
+    except KeyboardInterrupt:
+        print("STOPPED: test records are retained. The running report is not a pass.")
+        print("Results: " + str(report_path))
+        return 130
+    try:
+        report = json.loads(captured.getvalue())
+    except (ValueError, TypeError):
+        print("ERROR: no complete results summary was produced. The run is not a pass.")
+        print("Results: " + str(report_path))
+        return 3
+    status = str(report.get("status", "error"))
+    print("\nRESULT: " + status.upper().replace("_", " "))
+    counts = report.get("counts", {})
+    if counts:
+        print("Checks: " + ", ".join(str(counts.get(key, 0)) + " " + label for key, label in
+              (("pass", "passed"), ("fail", "failed"), ("error", "errors"), ("skip", "incomplete"),
+               ("known_limitation", "known limitations"))))
+    if report.get("reason"):
+        print("Setup/error: " + str(report["reason"]))
+    problems = [feature for feature in report.get("features", []) if feature.get("status") in ("skip", "fail", "error")]
+    if problems:
+        print("Items needing attention:")
+        for feature in problems:
+            print("  " + str(feature.get("name", "check")) + ": " + str(feature.get("reason", feature.get("status", "incomplete"))))
+    if status == "incomplete":
+        print("Available checks ran; missing prerequisites were not counted as passes.")
+    print("Results: " + str(report_path))
+    return code
+
+
+def main(argv=None, *, laptop=False) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if not arguments:
+        return run_laptop()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--access-profile", choices=("comprehensive", "production"), default="comprehensive",
                         help="production enforces connector POST plus Event R / Alert RW / Incident RW only")
@@ -3781,7 +4113,7 @@ def main() -> int:
                         help="recover a prior DEV temporary default-CI lease; needs connection credentials but no test fixtures")
     parser.add_argument("--list-tests", action="store_true", help="list the complete feature manifest without reading credentials or contacting an instance")
     parser.add_argument("--plan", action="store_true", help="show read/write scope and prerequisites without reading credentials or contacting an instance")
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
     if args.list_tests or args.plan:
         if args.access_profile == "production":
             print(json.dumps({"status": "plan", "access_profile": "production",
@@ -3820,6 +4152,8 @@ def main() -> int:
     provisioner = None
     report_output_allowed = True
     try:
+        if laptop and args.access_profile != "production":
+            raise ValueError("the one-command laptop test only permits production-safe access")
         if args.access_profile == "production" and any((args.provision_dev_fixtures, args.confirm_fixture_target,
                 args.prepare_fixtures_only, args.allow_default_ci_property, args.fixture_output,
                 args.fixture_recovery_file, args.restore_fixture_default_ci)):
@@ -3837,8 +4171,9 @@ def main() -> int:
                                                                    args.fixture_output, args.fixture_recovery_file, args.confirm_fixture_target)):
             raise ValueError("administrative fixture flags require --provision-dev-fixtures or the explicit recovery mode")
         values = read_env(Path(args.env_file).expanduser())
-        instance, auth, settings = configuration(args, values, connection_only=recovery)
-        ca_bundle = args.ca_bundle or os.environ.get("USBEM_CA_BUNDLE", "") or values.get("USBEM_CA_BUNDLE", "")
+        connection_options = {"environment": {}} if laptop else {}
+        instance, auth, settings = configuration(args, values, connection_only=recovery, **connection_options)
+        ca_bundle = args.ca_bundle or ("" if laptop else os.environ.get("USBEM_CA_BUNDLE", "")) or values.get("USBEM_CA_BUNDLE", "")
         client_type = ProductionClient if args.access_profile == "production" else Client
         client = client_type(instance, auth, ca_bundle, args.insecure)
         if recovery:
@@ -3851,7 +4186,7 @@ def main() -> int:
                       "fixture_setup": provisioner.info}
         else:
             try:
-                fixtures = json.loads(fixture_input(args, values))
+                fixtures = json.loads(fixture_input(args, values, **connection_options))
             except ValueError:
                 raise ValueError("test fixture input must be a JSON object") from None
             if not isinstance(fixtures, dict):
@@ -3880,7 +4215,7 @@ def main() -> int:
                           "fixture_setup": provisioner.info}
             else:
                 runner_options = {"provisioner": provisioner} if provisioner is not None else {}
-                runner_type = ProductionRunner if args.access_profile == "production" else ComprehensiveRunner
+                runner_type = LaptopProductionRunner if laptop else ProductionRunner if args.access_profile == "production" else ComprehensiveRunner
                 report = runner_type(client, settings, fixtures, **runner_options).run(
                     lambda message: print(message, file=sys.stderr, flush=True))
                 if provisioner is not None:

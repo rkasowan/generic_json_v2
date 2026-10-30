@@ -34,3 +34,6 @@ dev-report.json
 it-report.json
 uat-report.json
 prod-report.json
+# Automatic one-command laptop reports contain private instance/record evidence.
+dti-results-*.json
+dev-fixutres.json
